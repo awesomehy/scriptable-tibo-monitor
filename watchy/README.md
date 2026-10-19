@@ -2,6 +2,8 @@
 
 在 Apple Watch 上显示网站最新一条公开消息、上次成功读取时间及重置判定。中文翻译未完成时自动显示原文和状态；所有时间为北京时间。正文固定长度摘要，不随消息长度改变字号。
 
+默认安装位置是**从表盘向上轻扫后出现的智能叠放（Smart Stack）**。Watchy 的矩形组件可加入智能叠放，现有数据源代码无需改动。智能叠放从 watchOS 10 起提供；在 Widgy 中分配矩形组件并同步后，按第 3 节添加即可。
+
 **交付方式：可粘贴的 JavaScript 数据源和下面的布局配置。** 本目录没有经 Widgy 原生导出、真机验证的 `.widgy` 文件或导入二维码；`TiboWatchy.js` 不能通过“导入组件”安装，需要在 Widgy 中创建一个文字层后粘贴。当前电脑无法运行 iPhone / Watchy，因此实际编辑器名称、手表排版和同步效果仍需在设备上确认。
 
 ## 1. 安装应用
@@ -12,7 +14,7 @@
 
 ## 2. 创建矩形组件
 
-建议先做表盘中央的**矩形复杂功能**，容纳消息比圆形槽位更合适。不同版本的编辑器位置及中文翻译可能有差异，下文同时写出英文名称。
+创建供**智能叠放**使用的矩形组件。Widgy 编辑器或槽位仍可能将其称为“矩形复杂功能 / Rectangular Complication”；它也能放入智能叠放，不需要先添加到表盘。不同版本的编辑器位置及中文翻译可能有差异，下文同时写出英文名称。
 
 1. 在 Watchy 区域点 **创建 / Create → 新建 / New**，选择供矩形复杂功能使用的画布（Rectangular / Graphic Rectangular），命名 `Tibo 最新消息`。
 2. 新增 **文字 / Text** 层，铺满可用画布，四边留约 4% 空白。
@@ -33,7 +35,7 @@
 | 项目 | 设置 |
 | --- | --- |
 | 背景 | 黑色或系统默认 |
-| 字色 | 白色 / 系统前景色；表盘着色模式可能统一颜色 |
+| 字色 | 白色 / 系统前景色；系统呈现模式可能统一颜色 |
 | 字体 | System Regular，固定字号，视觉大小约 11–12 pt |
 | 对齐 | 左对齐、顶部对齐 |
 | 换行 | 允许多行；给全部内容留约 4–5 行空间 |
@@ -42,14 +44,19 @@
 
 `MAX_BODY_CHARS` 位于脚本开头，改小可以减少换行、保证时间仍显示。字号在 Widgy 文字层中设定；脚本输出普通文字，不控制字体。不要增加外部图片层，以免增加下载和内存消耗。
 
-## 3. 同步与放到表盘
+## 3. 同步与加入智能叠放
 
 1. iPhone Widgy → **管理 / Manage → Watchy**，将 `Tibo 最新消息` 分配给可用的矩形复杂功能槽位；记住所选槽位。
 2. 在 Apple Watch 上打开 **Watchy / Widgy**，让它保持在前台，再在 iPhone Widgy 中执行 **同步到 Apple Watch / Sync to Watch**，等同步结束后在手表中查看。
-3. 长按 Apple Watch 表盘 → **编辑 → 复杂功能**，选择支持矩形大槽位的表盘（例如模块 / Modular），点中央矩形区域，选择 **Watchy / Widgy** 及上一步对应槽位，再按 Digital Crown 保存。也可通过 iPhone Watch App 编辑该表盘的复杂功能。
-4. 检查手表上能看到摘要和 `刷新 MM/DD HH:mm`。看不到 Watchy 选项时，先确认手表端安装完成、同步完成、表盘槽位形状与分配的组件类型一致。
+3. 回到 Apple Watch 表盘，**从屏幕底部向上轻扫**，或向上旋转数码表冠，打开智能叠放。
+4. 进入编辑：新版系统可滚动到底部点 **编辑**，其他版本可长按任一小组件；点 **＋** 添加小组件。
+5. 在列表中找到 **Watchy / Widgy**，选择矩形小组件及上一步分配的对应槽位后添加。如果提供多个槽位预览或自定选项，选择 `Tibo 最新消息` 所在槽位。
+6. 在编辑状态点该小组件的**图钉 / 置顶**按钮，再点完成。以后从表盘向上轻扫，就能在智能叠放中查看它。
+7. 检查卡片中能看到摘要和 `刷新 MM/DD HH:mm`。看不到 Watchy 选项时，先确认手表端已安装、版本已更新、已分配矩形槽位并完成同步，再重新打开智能叠放添加列表。
 
-若想在 **Watchy 应用内**看更长内容，另建或复制一个适合应用全屏的 Watchy 画布，将脚本开头 `MODE = "compact"` 改为 `MODE = "full"`，正文上限变为 160 个字符，文字层给更多高度。全屏画布与表盘复杂功能的槽位需要分别分配；长文仍可能截断，完整原帖可在 iPhone 网站查看。
+以上步骤使用任意表盘即可。若以后也想放到表盘，可另外长按表盘 → 编辑 → 复杂功能，在支持矩形大槽位的表盘（例如模块 / Modular）中选择 Watchy / Widgy 及对应槽位。
+
+若想在 **Watchy 应用内**看更长内容，另建或复制一个适合应用全屏的 Watchy 画布，将脚本开头 `MODE = "compact"` 改为 `MODE = "full"`，正文上限变为 160 个字符，文字层给更多高度。全屏画布与智能叠放使用的矩形组件需要分别分配；智能叠放保持 `compact`。长文仍可能截断，完整原帖可在 iPhone 网站查看。
 
 ## 4. 刷新时间怎么理解
 
@@ -59,7 +66,7 @@
 - 网络、格式或 HTTP 错误会输出“刷新失败”，不显示新的成功时间；没有自行持久化缓存。系统如果没有重绘而保留旧画面，旧时间也会保留。
 - 脚本**不设置定时器轮询**，只在 Watchy 调用时请求一次。8 秒定时器仅用于终止等待，不是刷新频率。
 
-在你的 Widgy / Watchy 槽位设置中，如果提供自动刷新选项，可开启并选择它允许的间隔。**不能承诺每 10 分钟更新 Apple Watch 表盘**；最终运行和重绘受 watchOS、联网及后台条件影响，Scriptable 的 10 分钟设置也不会传到 Watchy。急需确认时打开手表端 Watchy 触发重新加载；若该版本提供刷新按钮，使用它，并确认显示时间实际变化。
+在你的 Widgy / Watchy 槽位设置中，如果提供自动刷新选项，可开启并选择它允许的间隔。**不能承诺每 10 分钟更新智能叠放中的卡片**；最终运行和重绘受 watchOS、联网及后台条件影响，Scriptable 的 10 分钟设置也不会传到 Watchy。上滑打开智能叠放本身不保证重新请求接口，应查看卡片上的成功读取时间。急需确认时打开手表端 Watchy 触发重新加载；若该版本提供刷新按钮，使用它，并确认显示时间实际变化。
 
 每次脚本实际运行仅调用一次公开消息 API，不需要登录或 Token，不读取私人订阅，不请求 `/api/status`，不触发采集、翻译或微信推送。同一数据源复制到多个组件时会分别运行，不能假定跨组件共享缓存；预览、同步也可能使应用额外运行脚本。
 
@@ -80,6 +87,8 @@
 已验证 JavaScript 的成功、空结果、长文本、翻译等待、判定等待、HTTP / 网络 / 格式失败及超时处理；公开消息接口已部署跨域支持，并通过浏览器跨域读取和线上数据源运行检查。没有 iPhone / Apple Watch 真机运行或原生导入测试。调整代码后需要重新粘贴并同步，Scriptable 菜单中的“一键更新”只更新 Scriptable 脚本。
 
 - [Apple 官方：自定 Apple Watch 表盘和复杂功能](https://support.apple.com/guide/watch/customize-the-watch-face-apda6559ad78/watchos)
+- [Apple 官方：打开、自定和置顶智能叠放小组件](https://support.apple.com/zh-cn/guide/watch/apdecf142fb9/watchos)
+- [Widgy 开发者：矩形 Watchy 组件可置顶到智能叠放](https://www.reddit.com/r/widgy/comments/1p59vh0/plans_to_add_live_activities_widget_on_watch/)
 - [Widgy 开发者：异步 JavaScript 的 sendToWidgy 用法](https://www.reddit.com/r/widgy/comments/ojnju9/165_has_been_released/)
 - [Widgy 开发者：新版 Watchy 同步、JavaScript 与槽位设置改动](https://www.reddit.com/r/widgy/comments/1w5rb1m/announcing_widgy_v27_public_beta_next_week/)
 - [Widgy / Watchy 开发者 FAQ：同步时打开手表端应用](https://www.reddit.com/r/widgy/comments/v3jslo/widgywatchy_faq_and_feature_requests_megathread/)（历史 FAQ 中关于复杂功能不支持 JavaScript 的旧限制，不能替代新版能力说明。）
