@@ -1,33 +1,65 @@
 // Variables used by Scriptable.
 // icon-color: deep-green; icon-glyph: rss;
 // TIBO_MONITOR_WIDGET
-// version: 1.0.2
+// version: 1.0.3
 
 // 在 Scriptable 中直接运行可预览、更新或恢复脚本。
 // 小组件 Parameter 示例：{"count":2,"refreshMinutes":10,"theme":"auto"}
 // 配置放在小组件 Parameter 中，更新代码不会覆盖配置。
-const VERSION = "1.0.2";
+const VERSION = "1.0.3";
 const SITE = "https://tibo-monitor.hhyan.me";
 const REPOSITORY = "awesomehy/scriptable-tibo-monitor";
 const BRANCH = "main";
 const DEFAULTS = { counts: { small: 1, medium: 3, large: 6 }, refreshMinutes: 10, language: "zh", theme: "auto" };
 const LIMITS = { small: 2, medium: 3, large: 7 };
 const localFiles = FileManager.local();
-const dataDirectory = localFiles.joinPath(localFiles.libraryDirectory(), "TiboMonitorWidget");
+const dataDirectory = localFiles.joinPath(localFiles.documentsDirectory(), "TiboMonitorWidget");
+const legacyDataDirectory = localFiles.joinPath(localFiles.libraryDirectory(), "TiboMonitorWidget");
 
 function isObject(value) { return value !== null && typeof value === "object" && !Array.isArray(value); }
 function validDate(value) { return typeof value === "string" && Number.isFinite(Date.parse(value)); }
 function failure(message, retryAt) { const error = new Error(message); error.retryAt = retryAt || 0; return error; }
+function errorText(error) { return String(error?.message || error); }
 function ensureDirectory() { if (!localFiles.fileExists(dataDirectory)) localFiles.createDirectory(dataDirectory, true); }
 function readLocal(name, fallback) {
-  try { return JSON.parse(localFiles.readString(localFiles.joinPath(dataDirectory, name))); } catch (_) { return fallback; }
+  // 优先读取本地 Documents，兼容旧版 Library 中的消息缓存和更新备份。
+  for (const directory of [dataDirectory, legacyDataDirectory]) {
+    try { return JSON.parse(localFiles.readString(localFiles.joinPath(directory, name))); } catch (_) {}
+  }
+  return fallback;
 }
 function writeLocal(name, value) {
-  ensureDirectory();
   const path = localFiles.joinPath(dataDirectory, name);
-  const temporary = path + ".tmp";
-  localFiles.writeString(temporary, JSON.stringify(value));
-  localFiles.move(temporary, path);
+  // writeString 明确支持覆盖写入，避免依赖 move 替换和共享同名临时文件。
+  let previous = null, attempted = false;
+  try {
+    const content = JSON.stringify(value);
+    if (typeof content !== "string") throw failure("内容无法序列化");
+    ensureDirectory();
+    if (localFiles.fileExists(path)) {
+      previous = localFiles.readString(path);
+      if (typeof previous !== "string") throw failure("无法读取原文件");
+    }
+    attempted = true;
+    localFiles.writeString(path, content);
+    if (localFiles.readString(path) !== content) throw failure("写入回读校验失败");
+  } catch (error) {
+    let recovery = "";
+    if (attempted) {
+      try {
+        if (previous === null) { if (localFiles.fileExists(path)) localFiles.remove(path); }
+        else {
+          let current = null;
+          try { current = localFiles.readString(path); } catch (_) {}
+          if (current !== previous) {
+            localFiles.writeString(path, previous);
+            if (localFiles.readString(path) !== previous) throw failure("恢复回读校验失败");
+          }
+        }
+      } catch (restoreError) { recovery = "；恢复原文件失败：" + errorText(restoreError); }
+    }
+    throw failure("保存 " + name + " 失败：" + errorText(error) + recovery);
+  }
 }
 
 function settingsFor(parameter, family) {
@@ -138,9 +170,11 @@ async function loadSnapshot(settings, force) {
     } catch (_) { /* 损坏缓存不作为成功数据使用。 */ }
   }
   const now = Date.now();
+  let changed = false;
   await Promise.all(["tweets", "status"].map(async key => {
     if (now < (state.retryAt[key] || 0)) return;
     if (!force && now < (state.attempts[key] || 0) + settings.refreshMinutes * 60000) return;
+    changed = true;
     state.attempts[key] = now;
     try {
       const payload = parseJSON(await downloadText(SITE + "/api/" + key));
@@ -153,7 +187,14 @@ async function loadSnapshot(settings, force) {
       if (error.retryAt) state.retryAt[key] = error.retryAt;
     }
   }));
-  try { writeLocal("snapshot.json", state); } catch (_) { state.storageError = true; }
+  // 只读缓存时不重复写盘；请求结果（包括限流和失败）发生变化才保存。
+  if (changed) {
+    try { writeLocal("snapshot.json", state); }
+    catch (error) {
+      state.storageError = errorText(error);
+      console.error("[TiboMonitor] 缓存未保存：" + state.storageError);
+    }
+  }
   const deadlines = ["tweets", "status"].map(key => Math.max((state.attempts[key] || now) + settings.refreshMinutes * 60000, state.retryAt[key] || 0));
   state.nextRefresh = new Date(Math.max(Date.now() + 60000, Math.min(...deadlines)));
   return state;
@@ -393,6 +434,24 @@ async function showMessage(title, message) {
   const alert = new Alert(); alert.title = title; alert.message = message; alert.addAction("好"); await alert.presentAlert();
 }
 
+async function diagnoseCache() {
+  const name = "storage-check-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2) + ".json";
+  const path = localFiles.joinPath(dataDirectory, name);
+  const probe = { version: VERSION, checkedAt: new Date().toISOString() };
+  let title = "缓存诊断通过";
+  let message = "本地文件写入与回读正常。\n保存目录：" + dataDirectory + "\n请重新预览组件，刷新消息缓存。";
+  try {
+    writeLocal(name, probe);
+    const saved = readLocal(name, null);
+    if (saved?.version !== probe.version || saved?.checkedAt !== probe.checkedAt) throw failure("缓存读取校验失败");
+  } catch (error) { title = "缓存诊断失败"; message = errorText(error) + "\n保存目录：" + dataDirectory; }
+  finally {
+    try { if (localFiles.fileExists(path)) localFiles.remove(path); }
+    catch (error) { title = "缓存诊断失败"; message += "\n诊断文件清理失败：" + errorText(error); }
+  }
+  await showMessage(title, message);
+}
+
 async function updateScript() {
   if (!config.runsInApp) throw failure("请在 Scriptable 内更新脚本");
   let updatedVersion;
@@ -440,28 +499,34 @@ async function main() {
     if (args.queryParameters?.action !== "refresh") {
       const menu = new Alert(); menu.title = "Tibo 动态 · v" + VERSION;
       menu.message = "预览会重新读取公开消息。所有显示时间均为北京时间。";
-      ["预览小组件", "预览中组件", "预览大组件", "一键更新脚本", "恢复更新前版本", "打开网站"].forEach(title => menu.addAction(title));
+      ["预览小组件", "预览中组件", "预览大组件", "一键更新脚本", "恢复更新前版本", "打开网站", "缓存诊断"].forEach(title => menu.addAction(title));
       menu.addCancelAction("取消");
       const choice = await menu.presentSheet();
       if (choice < 0) return;
       if (choice === 3) { await updateScript(); return; }
       if (choice === 4) { await restoreScript(); return; }
       if (choice === 5) { Safari.open(SITE); return; }
+      if (choice === 6) { await diagnoseCache(); return; }
       family = ["small", "medium", "large"][choice];
     }
   }
   if (!LIMITS[family]) {
     const widget = new ListWidget(); widget.addText("请添加桌面小、中或大组件"); Script.setWidget(widget); return;
   }
-  let widget;
+  let widget, storageError;
   try {
     const settings = settingsFor(parameter, family);
-    widget = renderWidget(await loadSnapshot(settings, config.runsInApp), settings, family);
+    const state = await loadSnapshot(settings, config.runsInApp);
+    storageError = state.storageError;
+    widget = renderWidget(state, settings, family);
   } catch (error) {
     widget = new ListWidget(); widget.addText("小组件配置错误"); widget.addText(error.message); widget.url = scriptURL();
   }
   Script.setWidget(widget);
-  if (config.runsInApp) await widget[{ small: "presentSmall", medium: "presentMedium", large: "presentLarge" }[family]]();
+  if (config.runsInApp) {
+    if (storageError) await showMessage("缓存未保存", storageError + "\n本次消息仍可查看。可返回菜单选择“缓存诊断”检查本地存储。");
+    await widget[{ small: "presentSmall", medium: "presentMedium", large: "presentLarge" }[family]]();
+  }
 }
 
 try { await main(); } finally { Script.complete(); }

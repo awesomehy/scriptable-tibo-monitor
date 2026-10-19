@@ -8,6 +8,8 @@ const source = await readFile(new URL('../TiboMonitor.js', import.meta.url), 'ut
 const currentVersion = source.match(/^const VERSION = "([\d.]+)";/m)[1];
 const nextVersion = currentVersion.split('.').map((part, index) => index === 2 ? Number(part) + 1 : part).join('.');
 const START = Date.parse('2026-10-19T04:30:00Z');
+const CACHE_PATH = '/documents/TiboMonitorWidget/snapshot.json';
+const LEGACY_CACHE_PATH = '/library/TiboMonitorWidget/snapshot.json';
 const tweet = (id = '2111990254408434095', overrides = {}) => ({ id, text: 'Original post',
   url: `https://x.com/thsottiaux/status/${id}`, publishedAt: '2026-10-19T01:18:10Z', isDemo: false,
   translation: { status: 'complete', text: '中文消息' }, resetClassification: { status: 'complete', isResetAnnouncement: false }, ...overrides });
@@ -18,18 +20,28 @@ async function harness(options = {}) {
   const definitions = runningSource.replace('try { await main(); } finally { Script.complete(); }', '');
   const clock = { now: options.now || START };
   const files = options.files || new Map([['/documents/TiboMonitor.js', runningSource]]);
-  const calls = [], nodes = [], messages = [], launches = [], previews = [], widgets = [], menus = [];
+  const calls = [], nodes = [], messages = [], launches = [], previews = [], widgets = [], menus = [], fileOps = [], logs = [];
   let plan = {}, moveFailure = false, openFailure = false;
+  const fileOperation = (operation, path, content) => {
+    fileOps.push({ operation, path });
+    options.onFileOperation?.({ operation, path, content, files });
+  };
   class FakeDate extends Date {
     constructor(...args) { super(...(args.length ? args : [clock.now])); }
     static now() { return clock.now; }
   }
   const fm = {
     libraryDirectory: () => '/library', documentsDirectory: () => '/documents', joinPath: (a, b) => `${a}/${b}`,
-    fileExists: path => files.has(path), createDirectory: path => files.set(path, null),
-    readString(path) { if (!files.has(path)) throw Error('missing'); return files.get(path); },
-    writeString: (path, text) => files.set(path, text), remove: path => files.delete(path),
-    move(a, b) { if (moveFailure && b.endsWith('TiboMonitor.js')) throw Error('disk failure'); files.set(b, fm.readString(a)); files.delete(a); },
+    fileExists: path => files.has(path),
+    createDirectory(path) { fileOperation('createDirectory', path); files.set(path, null); },
+    readString(path) { fileOperation('readString', path); if (!files.has(path)) throw Error('missing'); return files.get(path); },
+    writeString(path, text) { fileOperation('writeString', path, text); files.set(path, options.transformWrite?.(path, text) ?? text); },
+    remove(path) { fileOperation('remove', path); files.delete(path); },
+    move(a, b) {
+      fileOperation('move', b);
+      if (moveFailure && b.endsWith('TiboMonitor.js')) throw Error('disk failure');
+      files.set(b, fm.readString(a)); files.delete(a);
+    },
     isFileStoredIniCloud: () => options.cloud === true, async downloadFileFromiCloud() {},
   };
   class Element {
@@ -54,6 +66,7 @@ async function harness(options = {}) {
   }
   const cloud = { ...fm };
   const context = { FileManager: { local: () => fm, iCloud: () => cloud }, Request, Date: FakeDate,
+    console: { error: message => logs.push(String(message)) },
     ListWidget: Element, Font: { systemFont: size => size, semiboldSystemFont: size => size },
     Size: class { constructor(width, height) { this.width = width; this.height = height; } },
     Color: class { constructor(value) { this.value = value; } static dynamic(light) { return light; } },
@@ -67,9 +80,9 @@ async function harness(options = {}) {
     },
   };
   const names = ['settingsFor', 'validateTweets', 'validateStatus', 'loadSnapshot', 'textFor', 'resetLabel',
-    'beijingTime', 'sourceBadge', 'renderWidget', 'sha256', 'newerVersion', 'validateUpdate', 'replaceScript', 'updateScript', 'restoreScript', 'main'];
+    'beijingTime', 'sourceBadge', 'renderWidget', 'sha256', 'newerVersion', 'validateUpdate', 'replaceScript', 'updateScript', 'restoreScript', 'main', 'readLocal', 'writeLocal'];
   const api = await vm.runInNewContext(`(async () => { ${definitions}\nreturn {${names.join(',')}}; })()`, context);
-  return { ...api, clock, files, calls, nodes, messages, launches, previews, widgets, menus, context, settings: api.settingsFor(null, 'medium'),
+  return { ...api, clock, files, calls, nodes, messages, launches, previews, widgets, menus, fileOps, logs, context, settings: api.settingsFor(null, 'medium'),
     setPlan: value => { plan = value; }, failMove: () => { moveFailure = true; },
     failOpen: () => { openFailure = true; },
     ready: () => { plan = { tweets: { body: { tweets: [tweet()] } }, status: { body: status() } }; } };
@@ -178,6 +191,137 @@ test('消息、采集状态分别处理失败；格式错误不得冒充空消�
   assert.equal(malformed.tweets[0].id, '2');
 });
 
+test('Library 写入不可用及缓存移动失败时，仍能保存并跨运行复用本地消息', async () => {
+  const h = await harness({ onFileOperation({ operation, path }) {
+    if (path.startsWith('/library/') && ['createDirectory', 'writeString', 'move'].includes(operation)) throw Error('Library is not writable');
+    if (operation === 'move' && path.endsWith('snapshot.json')) throw Error('cannot replace destination');
+  } });
+  h.ready(); const first = await h.loadSnapshot(h.settings, false);
+  assert.equal(first.storageError, undefined);
+  assert.equal(JSON.parse(h.files.get(CACHE_PATH)).tweets[0].id, tweet().id);
+  h.clock.now += 10 * 60000;
+  h.setPlan({ tweets: { body: { tweets: [tweet('2')] } }, status: { body: status() } });
+  const second = await h.loadSnapshot(h.settings, false);
+  assert.equal(second.storageError, undefined);
+  const restarted = await harness({ files: h.files, now: h.clock.now + 60000 });
+  const cached = await restarted.loadSnapshot(restarted.settings, false);
+  assert.equal(restarted.calls.length, 0);
+  assert.equal(cached.tweets[0].id, '2');
+  assert.equal(cached.tweetsAt, second.tweetsAt);
+  assert.equal(h.fileOps.filter(op => op.operation === 'move').length, 0);
+});
+
+test('有效缓存未到期时只读，不重复写盘；迁移旧缓存保留同步时间和 Retry-After', async () => {
+  const h = await harness(); h.ready(); const first = await h.loadSnapshot(h.settings, false);
+  const stored = h.files.get(CACHE_PATH);
+  const legacy = JSON.parse(stored);
+  legacy.retryAt = { tweets: START + 3600000, status: START + 3600000 };
+  h.files.delete(CACHE_PATH); h.files.set(LEGACY_CACHE_PATH, JSON.stringify(legacy));
+  h.fileOps.length = 0; h.clock.now += 60000;
+  const cached = await h.loadSnapshot(h.settings, false);
+  assert.equal(cached.tweetsAt, first.tweetsAt);
+  assert.equal(cached.retryAt.tweets, START + 3600000);
+  assert.equal(h.calls.length, 2);
+  assert.equal(h.fileOps.filter(op => ['writeString', 'move', 'createDirectory'].includes(op.operation)).length, 0);
+  h.clock.now += 3600000; h.ready();
+  await h.loadSnapshot(h.settings, false);
+  assert.equal(JSON.parse(h.files.get(CACHE_PATH)).tweetsAt, new Date(h.clock.now).toISOString());
+  h.fileOps.length = 0;
+  await h.loadSnapshot(h.settings, false);
+  assert.equal(h.fileOps.filter(op => op.operation === 'writeString').length, 0);
+});
+
+test('缓存真实写入失败时记录具体错误，保留旧缓存与可显示消息，恢复后清除提示', async () => {
+  let unavailable = false;
+  const h = await harness({ onFileOperation({ operation, path }) {
+    if (unavailable && operation === 'writeString' && path.endsWith('snapshot.json')) throw Error('No space left on device');
+  } });
+  h.ready(); const first = await h.loadSnapshot(h.settings, false);
+  const stored = h.files.get(CACHE_PATH);
+  unavailable = true; h.clock.now += 10 * 60000;
+  h.setPlan({ tweets: { body: { tweets: [tweet('2')] } }, status: { body: status() } });
+  const failed = await h.loadSnapshot(h.settings, false);
+  assert.match(failed.storageError, /No space left on device/);
+  assert.equal(h.sourceBadge(failed, h.settings).text, '缓存未保存');
+  assert.equal(failed.tweets[0].id, '2');
+  assert.notEqual(failed.tweetsAt, first.tweetsAt);
+  assert.equal(h.files.get(CACHE_PATH), stored);
+  assert.ok(h.logs.some(line => line.includes('No space left on device')));
+  unavailable = false;
+  const recovered = await h.loadSnapshot(h.settings, true);
+  assert.equal(recovered.storageError, undefined);
+  assert.equal(JSON.parse(h.files.get(CACHE_PATH)).tweets[0].id, '2');
+});
+
+test('写入回读不一致会报错并恢复上一次完整缓存，不覆盖已有更新备份', async () => {
+  let corruptNext = false;
+  const h = await harness({ transformWrite(path, text) {
+    if (corruptNext && path === CACHE_PATH) { corruptNext = false; return text.slice(0, 20); }
+    return text;
+  } });
+  h.ready(); await h.loadSnapshot(h.settings, false);
+  const stored = h.files.get(CACHE_PATH);
+  corruptNext = true; h.clock.now += 10 * 60000;
+  const failed = await h.loadSnapshot(h.settings, false);
+  assert.match(failed.storageError, /校验失败/);
+  assert.equal(h.files.get(CACHE_PATH), stored);
+  const { next } = release(); await h.replaceScript(next, true);
+  const backupPath = Array.from(h.files.keys()).find(path => /backup-.*\.json$/.test(path));
+  const backup = h.files.get(backupPath);
+  assert.throws(() => h.writeLocal(backupPath.split('/').at(-1), { bad: undefined, self: 1n }));
+  assert.equal(h.files.get(backupPath), backup);
+});
+
+test('应用预览显示具体缓存错误，桌面后台仅保留警示和日志', async () => {
+  const options = { choice: 1, onFileOperation({ operation }) {
+    if (operation === 'writeString') throw Error('Permission denied');
+  } };
+  const app = await harness(options); app.ready(); await app.main();
+  assert.equal(app.messages.at(-1).title, '缓存未保存');
+  assert.match(app.messages.at(-1).message, /Permission denied/);
+  assert.deepEqual(app.previews, ['medium']);
+  assert.ok(app.nodes.some(node => node.text === '缓存未保存'));
+  const widget = await harness(options); widget.context.config.runsInApp = false;
+  widget.ready(); await widget.main();
+  assert.equal(widget.messages.length, 0);
+  assert.ok(widget.nodes.some(node => node.text === '缓存未保存'));
+  assert.ok(widget.logs.some(message => message.includes('Permission denied')));
+});
+
+test('缓存诊断检查读写并清理探测文件，不发网络请求、不改变已有缓存', async () => {
+  const h = await harness({ choice: 6 }); h.ready(); await h.loadSnapshot(h.settings, false);
+  const stored = h.files.get(CACHE_PATH);
+  const requestCount = h.calls.length;
+  await h.main();
+  assert.equal(h.messages.at(-1).title, '缓存诊断通过');
+  assert.match(h.messages.at(-1).message, /Documents|documents/);
+  assert.equal(h.files.get(CACHE_PATH), stored);
+  assert.equal(h.calls.length, requestCount);
+  assert.equal(h.previews.length, 0);
+  assert.ok(!Array.from(h.files.keys()).some(path => path.includes('storage-check-')));
+  const broken = await harness({ choice: 6, onFileOperation({ operation }) {
+    if (operation === 'createDirectory') throw Error('Directory is read-only');
+  } });
+  await broken.main();
+  assert.equal(broken.messages.at(-1).title, '缓存诊断失败');
+  assert.match(broken.messages.at(-1).message, /Directory is read-only/);
+  assert.equal(broken.calls.length, 0);
+});
+
+test('旧版 Library 中的更新备份仍可恢复，之后写入使用本地 Documents', async () => {
+  const h = await harness(); const { next } = release();
+  await h.replaceScript(next, true);
+  const backupPath = Array.from(h.files.keys()).find(path => /backup-.*\.json$/.test(path));
+  const legacyPath = backupPath.replace('/documents/', '/library/');
+  h.files.set(legacyPath, h.files.get(backupPath)); h.files.delete(backupPath);
+  await h.restoreScript();
+  assert.equal(h.files.get('/documents/TiboMonitor.js'), source);
+  assert.equal(h.messages.at(-1).title, '已恢复');
+  h.ready(); const state = await h.loadSnapshot(h.settings, false);
+  assert.equal(state.storageError, undefined);
+  assert.equal(JSON.parse(h.files.get(CACHE_PATH)).tweets[0].id, tweet().id);
+});
+
 test('429 的 Retry-After 跨运行保存，手动刷新也不提前重试', async () => {
   const h = await harness(); h.ready(); await h.loadSnapshot(h.settings, false);
   h.clock.now += 16 * 60000;
@@ -281,7 +425,7 @@ test('更新成功后仅重启一次新版，自动刷新绕过新鲜缓存并�
   assert.deepEqual(restarted.previews, ['large']);
   assert.equal(restarted.calls.length, 2);
   assert.equal(restarted.launches.length, 0);
-  const after = JSON.parse(h.files.get('/library/TiboMonitorWidget/snapshot.json'));
+  const after = JSON.parse(h.files.get(CACHE_PATH));
   assert.notEqual(after.tweetsAt, before.tweetsAt);
   assert.equal(restarted.nodes.filter(node => node.text === '中文消息').length, 2);
   assert.equal(restarted.widgets[0].backgroundColor.value, '171C23');
@@ -304,7 +448,7 @@ test('应用菜单更新默认自动预览中组件；自动刷新仍遵守限�
   assert.equal(restarted.calls.length, 0);
   assert.equal(restarted.menus.length, 0);
   assert.deepEqual(restarted.previews, ['medium']);
-  const after = JSON.parse(h.files.get('/library/TiboMonitorWidget/snapshot.json'));
+  const after = JSON.parse(h.files.get(CACHE_PATH));
   assert.equal(after.tweetsAt, before.tweetsAt);
   assert.ok(restarted.nodes.some(node => /缓存/.test(node.text)));
 });
