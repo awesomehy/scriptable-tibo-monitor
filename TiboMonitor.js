@@ -1,12 +1,12 @@
 // Variables used by Scriptable.
 // icon-color: deep-green; icon-glyph: rss;
 // TIBO_MONITOR_WIDGET
-// version: 1.0.3
+// version: 1.0.4
 
 // 在 Scriptable 中直接运行可预览、更新或恢复脚本。
 // 小组件 Parameter 示例：{"count":2,"refreshMinutes":10,"theme":"auto"}
 // 配置放在小组件 Parameter 中，更新代码不会覆盖配置。
-const VERSION = "1.0.3";
+const VERSION = "1.0.4";
 const SITE = "https://tibo-monitor.hhyan.me";
 const REPOSITORY = "awesomehy/scriptable-tibo-monitor";
 const BRANCH = "main";
@@ -410,6 +410,7 @@ async function scriptFile() {
 async function replaceScript(source, keepBackup) {
   const { path, files } = await scriptFile();
   const original = files.readString(path);
+  if (typeof original !== "string" || !original) throw failure("无法读取当前脚本，未执行更新");
   const backupName = "backup-" + sha256(path).slice(0, 16) + ".json";
   const backup = { source: original, sha256: sha256(original), savedAt: new Date().toISOString() };
   if (keepBackup) writeLocal(backupName + ".pending", backup);
@@ -417,14 +418,21 @@ async function replaceScript(source, keepBackup) {
   try {
     files.writeString(temporary, source);
     if (files.readString(temporary) !== source) throw failure("新文件写入校验失败");
-    files.move(temporary, path);
+    // writeString 明确支持覆盖；不依赖设备上 move 对已有文件的处理行为。
+    files.writeString(path, source);
     if (files.readString(path) !== source) throw failure("替换文件校验失败");
     // 仅在替换成功后提交最新备份，失败的更新不覆盖上一次可恢复版本。
     if (keepBackup) writeLocal(backupName, backup);
-  } catch (_) {
-    try { files.writeString(path, original); }
-    catch (_) { throw failure("更新写入失败，请从本地备份恢复脚本"); }
-    throw failure("更新写入失败，已保留原脚本");
+  } catch (error) {
+    try {
+      let current = null;
+      try { current = files.readString(path); } catch (_) {}
+      if (current !== original) files.writeString(path, original);
+      if (files.readString(path) !== original) throw failure("恢复原脚本回读校验失败");
+    } catch (restoreError) {
+      throw failure("更新写入失败：" + errorText(error) + "；恢复原脚本失败：" + errorText(restoreError) + "。请手动复制仓库中的完整源码覆盖此脚本");
+    }
+    throw failure("更新写入失败，已保留原脚本：" + errorText(error));
   } finally {
     try { if (files.fileExists(temporary)) files.remove(temporary); } catch (_) {}
   }
@@ -469,7 +477,10 @@ async function updateScript() {
     validateUpdate(manifest, source);
     await replaceScript(source, true);
     updatedVersion = manifest.version;
-  } catch (error) { await showMessage("更新失败", error.message + "。可稍后再次点击更新。"); return; }
+  } catch (error) {
+    await showMessage("更新失败", errorText(error) + "\n网络错误可稍后重试；文件保存错误请手动复制 GitHub 中 TiboMonitor.js 的完整源码，覆盖此脚本后保存。无需删除脚本或重新配置桌面组件。");
+    return;
+  }
   try {
     // 重新运行已落盘的新版，跳过菜单刷新一次；不在旧运行环境中渲染新版。
     await Safari.open(scriptURL("refresh", args.queryParameters?.family, args.queryParameters?.parameter ?? args.widgetParameter));

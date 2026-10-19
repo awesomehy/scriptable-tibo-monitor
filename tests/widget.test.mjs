@@ -21,7 +21,7 @@ async function harness(options = {}) {
   const clock = { now: options.now || START };
   const files = options.files || new Map([['/documents/TiboMonitor.js', runningSource]]);
   const calls = [], nodes = [], messages = [], launches = [], previews = [], widgets = [], menus = [], fileOps = [], logs = [];
-  let plan = {}, moveFailure = false, openFailure = false;
+  let plan = {}, scriptWriteFailure = false, openFailure = false;
   const fileOperation = (operation, path, content) => {
     fileOps.push({ operation, path });
     options.onFileOperation?.({ operation, path, content, files });
@@ -35,11 +35,15 @@ async function harness(options = {}) {
     fileExists: path => files.has(path),
     createDirectory(path) { fileOperation('createDirectory', path); files.set(path, null); },
     readString(path) { fileOperation('readString', path); if (!files.has(path)) throw Error('missing'); return files.get(path); },
-    writeString(path, text) { fileOperation('writeString', path, text); files.set(path, options.transformWrite?.(path, text) ?? text); },
+    writeString(path, text) {
+      fileOperation('writeString', path, text);
+      if (scriptWriteFailure && path.endsWith('TiboMonitor.js')) throw Error('disk failure');
+      files.set(path, options.transformWrite?.(path, text) ?? text);
+    },
     remove(path) { fileOperation('remove', path); files.delete(path); },
     move(a, b) {
       fileOperation('move', b);
-      if (moveFailure && b.endsWith('TiboMonitor.js')) throw Error('disk failure');
+      if (options.rejectMove) throw Error('destination already exists');
       files.set(b, fm.readString(a)); files.delete(a);
     },
     isFileStoredIniCloud: () => options.cloud === true, async downloadFileFromiCloud() {},
@@ -83,7 +87,7 @@ async function harness(options = {}) {
     'beijingTime', 'sourceBadge', 'renderWidget', 'sha256', 'newerVersion', 'validateUpdate', 'replaceScript', 'updateScript', 'restoreScript', 'main', 'readLocal', 'writeLocal'];
   const api = await vm.runInNewContext(`(async () => { ${definitions}\nreturn {${names.join(',')}}; })()`, context);
   return { ...api, clock, files, calls, nodes, messages, launches, previews, widgets, menus, fileOps, logs, context, settings: api.settingsFor(null, 'medium'),
-    setPlan: value => { plan = value; }, failMove: () => { moveFailure = true; },
+    setPlan: value => { plan = value; }, failScriptWrite: () => { scriptWriteFailure = true; },
     failOpen: () => { openFailure = true; },
     ready: () => { plan = { tweets: { body: { tweets: [tweet()] } }, status: { body: status() } }; } };
 }
@@ -396,7 +400,7 @@ test('更新下载或写入失败保留原脚本，桌面后台禁止更新', as
   await h.updateScript();
   assert.equal(h.files.get('/documents/TiboMonitor.js'), source);
   h.setPlan({ main: { body: { sha: 'b'.repeat(40) } }, 'update.json': { body: manifest }, 'TiboMonitor.js': { raw: next } });
-  h.failMove(); await h.updateScript();
+  h.failScriptWrite(); await h.updateScript();
   assert.equal(h.files.get('/documents/TiboMonitor.js'), source);
   assert.match(h.messages.at(-1).title, /更新失败/);
   assert.equal(h.launches.length, 0);
@@ -473,7 +477,7 @@ test('失败更新保留上次成功备份；损坏备份不能替换当前代�
   await h.replaceScript(first.next, true);
   const backupPath = Array.from(h.files.keys()).find(path => /backup-.*\.json$/.test(path));
   const backup = h.files.get(backupPath);
-  h.failMove(); await assert.rejects(h.replaceScript(release('9.0.0').next, true));
+  h.failScriptWrite(); await assert.rejects(h.replaceScript(release('9.0.0').next, true));
   assert.equal(h.files.get('/documents/TiboMonitor.js'), first.next);
   assert.equal(h.files.get(backupPath), backup);
   h.files.set(backupPath, JSON.stringify({ ...JSON.parse(backup), source: source + '\ncorrupt' }));
@@ -486,6 +490,29 @@ test('iCloud 中的脚本使用同一备份和更新流程', async () => {
   const h = await harness({ cloud: true }); const { next } = release();
   await h.replaceScript(next, true); assert.equal(h.files.get('/documents/TiboMonitor.js'), next);
   await h.restoreScript(); assert.equal(h.files.get('/documents/TiboMonitor.js'), source);
+});
+
+test('目标文件存在且所有 move 都失败时，重复更新与恢复仍成功', async () => {
+  for (const cloud of [false, true]) {
+    const h = await harness({ cloud, rejectMove: true });
+    const first = release(), second = release('9.0.0');
+    await h.replaceScript(first.next, true);
+    await h.replaceScript(second.next, true);
+    assert.equal(h.files.get('/documents/TiboMonitor.js'), second.next);
+    await h.restoreScript();
+    assert.equal(h.files.get('/documents/TiboMonitor.js'), first.next);
+    assert.equal(h.fileOps.filter(op => op.operation === 'move').length, 0);
+  }
+});
+
+test('脚本覆盖写入不完整会恢复原文，并校验恢复结果', async () => {
+  let corrupt = true;
+  const h = await harness({ transformWrite(path, text) {
+    if (corrupt && path === '/documents/TiboMonitor.js') { corrupt = false; return text.slice(0, 30); }
+    return text;
+  } });
+  await assert.rejects(h.replaceScript(release().next, true), /已保留原脚本.*替换文件校验失败/);
+  assert.equal(h.files.get('/documents/TiboMonitor.js'), source);
 });
 
 test('发布清单和待发布代码完全匹配', async () => {
