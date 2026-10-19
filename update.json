@@ -1,6 +1,6 @@
 {
   "id": "tibo-monitor-widget",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "script": "TiboMonitor.js",
-  "sha256": "b9623ea8d3594a20d6f3ebedeb971f8830e595aa4072e6b8631d386fc82eda9c"
+  "sha256": "e35539a45c1ea9a16d70553637b9d0ce9b8937da5c29cc11ac94c2cda6ad6cad"
 }

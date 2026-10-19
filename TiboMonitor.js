@@ -1,16 +1,16 @@
 // Variables used by Scriptable.
 // icon-color: deep-green; icon-glyph: rss;
 // TIBO_MONITOR_WIDGET
-// version: 1.0.1
+// version: 1.0.2
 
 // 在 Scriptable 中直接运行可预览、更新或恢复脚本。
-// 小组件 Parameter 示例：{"count":2,"refreshMinutes":15,"theme":"auto"}
+// 小组件 Parameter 示例：{"count":2,"refreshMinutes":10,"theme":"auto"}
 // 配置放在小组件 Parameter 中，更新代码不会覆盖配置。
-const VERSION = "1.0.1";
+const VERSION = "1.0.2";
 const SITE = "https://tibo-monitor.hhyan.me";
 const REPOSITORY = "awesomehy/scriptable-tibo-monitor";
 const BRANCH = "main";
-const DEFAULTS = { counts: { small: 1, medium: 3, large: 6 }, refreshMinutes: 15, language: "zh", theme: "auto" };
+const DEFAULTS = { counts: { small: 1, medium: 3, large: 6 }, refreshMinutes: 10, language: "zh", theme: "auto" };
 const LIMITS = { small: 2, medium: 3, large: 7 };
 const localFiles = FileManager.local();
 const dataDirectory = localFiles.joinPath(localFiles.libraryDirectory(), "TiboMonitorWidget");
@@ -213,11 +213,17 @@ function addText(container, value, size, color, bold, lines) {
   text.font = bold ? Font.semiboldSystemFont(size) : Font.systemFont(size);
   text.textColor = color;
   text.lineLimit = lines || 1;
-  text.minimumScaleFactor = 0.85;
+  text.minimumScaleFactor = 1;
   return text;
 }
 
-function scriptURL(action) { return "scriptable:///run?scriptName=" + encodeURIComponent(Script.name()) + (action ? "&action=" + encodeURIComponent(action) : ""); }
+function scriptURL(action, family, parameter) {
+  let url = "scriptable:///run?scriptName=" + encodeURIComponent(Script.name());
+  if (action) url += "&action=" + encodeURIComponent(action);
+  if (LIMITS[family]) url += "&family=" + encodeURIComponent(family);
+  if (typeof parameter === "string" && parameter) url += "&parameter=" + encodeURIComponent(parameter);
+  return url;
+}
 function postURL(tweet) { return /^https:\/\/(?:x\.com|twitter\.com)\/thsottiaux\/status\/[1-9]\d{0,24}$/.test(tweet.url) ? tweet.url : SITE; }
 
 function renderWidget(state, settings, family) {
@@ -225,6 +231,7 @@ function renderWidget(state, settings, family) {
   const colors = palette(settings.theme);
   const small = family === "small";
   const short = small || family === "medium";
+  const parameter = JSON.stringify({ counts: settings.counts, refreshMinutes: settings.refreshMinutes, language: settings.language, theme: settings.theme });
   widget.backgroundColor = colors.background;
   widget.setPadding(short ? 10 : 14, short ? 12 : 16, short ? 10 : 14, short ? 12 : 16);
   widget.url = SITE;
@@ -239,7 +246,7 @@ function renderWidget(state, settings, family) {
     addText(header, badge.text, 10, badge.warning ? colors.warning : colors.accent, false);
     header.addSpacer(8);
     const menu = addText(header, "•••", 12, colors.muted, true);
-    menu.url = scriptURL();
+    menu.url = scriptURL(null, family, parameter);
   }
   widget.addSpacer(short ? 5 : 9);
   const tweets = (state.tweets || []).slice(0, settings.count);
@@ -259,8 +266,19 @@ function renderWidget(state, settings, family) {
     meta.addSpacer();
     addText(meta, beijingTime(tweet.publishedAt), short ? 9 : 10, colors.muted, false);
     row.addSpacer(1);
-    addText(row, textFor(tweet, settings.language), short ? 12 : 13, colors.text, false, bodyLines);
-    if (index < tweets.length - 1) widget.addSpacer(short ? 3 : 5);
+    // 正文固定字号；长消息按行数截断，不随长度缩小。
+    addText(row, textFor(tweet, settings.language), 12, colors.text, false, bodyLines);
+    if (index < tweets.length - 1) {
+      if (small) widget.addSpacer(3);
+      else {
+        widget.addSpacer(short ? 1 : 2);
+        const divider = widget.addStack();
+        divider.size = new Size(0, 1);
+        divider.backgroundColor = colors.rule;
+        divider.addSpacer();
+        widget.addSpacer(short ? 1 : 2);
+      }
+    }
   });
   widget.addSpacer();
   widget.addSpacer(4);
@@ -277,7 +295,7 @@ function renderWidget(state, settings, family) {
   if (!small) {
     lastRow.addSpacer();
     const update = addText(lastRow, "更新脚本 ↗", 9, colors.accent, false);
-    update.url = scriptURL("update");
+    update.url = scriptURL("update", family, parameter);
   }
   return widget;
 }
@@ -377,6 +395,7 @@ async function showMessage(title, message) {
 
 async function updateScript() {
   if (!config.runsInApp) throw failure("请在 Scriptable 内更新脚本");
+  let updatedVersion;
   try {
     // 先锁定提交，再从同一提交读取清单和代码，避免发布时文件版本不一致。
     const commit = parseJSON(await downloadText("https://api.github.com/repos/" + REPOSITORY + "/commits/" + BRANCH, 20));
@@ -390,8 +409,14 @@ async function updateScript() {
     const source = await downloadText(root + "TiboMonitor.js" + ref, 20, headers);
     validateUpdate(manifest, source);
     await replaceScript(source, true);
-    await showMessage("更新完成", "已更新至 v" + manifest.version + "。关闭当前脚本后再次运行即可使用新版。更新前的代码已备份，可在菜单中恢复。小组件 Parameter 保持不变。");
-  } catch (error) { await showMessage("更新失败", error.message + "。可稍后再次点击更新。"); }
+    updatedVersion = manifest.version;
+  } catch (error) { await showMessage("更新失败", error.message + "。可稍后再次点击更新。"); return; }
+  try {
+    // 重新运行已落盘的新版，跳过菜单刷新一次；不在旧运行环境中渲染新版。
+    await Safari.open(scriptURL("refresh", args.queryParameters?.family, args.queryParameters?.parameter ?? args.widgetParameter));
+  } catch (_) {
+    await showMessage("更新完成", "已更新至 v" + updatedVersion + "，但无法启动自动刷新。请再次运行脚本并选择预览。更新前代码已备份，小组件 Parameter 保持不变。");
+  }
 }
 
 async function restoreScript() {
@@ -407,25 +432,30 @@ async function restoreScript() {
 
 async function main() {
   let family = config.widgetFamily || "medium";
+  let parameter = args.widgetParameter;
   if (config.runsInApp) {
+    if (LIMITS[args.queryParameters?.family]) family = args.queryParameters.family;
+    if (args.queryParameters?.parameter !== undefined) parameter = args.queryParameters.parameter;
     if (args.queryParameters?.action === "update") { await updateScript(); return; }
-    const menu = new Alert(); menu.title = "Tibo 动态 · v" + VERSION;
-    menu.message = "预览会重新读取公开消息。所有显示时间均为北京时间。";
-    ["预览小组件", "预览中组件", "预览大组件", "一键更新脚本", "恢复更新前版本", "打开网站"].forEach(title => menu.addAction(title));
-    menu.addCancelAction("取消");
-    const choice = await menu.presentSheet();
-    if (choice < 0) return;
-    if (choice === 3) { await updateScript(); return; }
-    if (choice === 4) { await restoreScript(); return; }
-    if (choice === 5) { Safari.open(SITE); return; }
-    family = ["small", "medium", "large"][choice];
+    if (args.queryParameters?.action !== "refresh") {
+      const menu = new Alert(); menu.title = "Tibo 动态 · v" + VERSION;
+      menu.message = "预览会重新读取公开消息。所有显示时间均为北京时间。";
+      ["预览小组件", "预览中组件", "预览大组件", "一键更新脚本", "恢复更新前版本", "打开网站"].forEach(title => menu.addAction(title));
+      menu.addCancelAction("取消");
+      const choice = await menu.presentSheet();
+      if (choice < 0) return;
+      if (choice === 3) { await updateScript(); return; }
+      if (choice === 4) { await restoreScript(); return; }
+      if (choice === 5) { Safari.open(SITE); return; }
+      family = ["small", "medium", "large"][choice];
+    }
   }
   if (!LIMITS[family]) {
     const widget = new ListWidget(); widget.addText("请添加桌面小、中或大组件"); Script.setWidget(widget); return;
   }
   let widget;
   try {
-    const settings = settingsFor(args.widgetParameter, family);
+    const settings = settingsFor(parameter, family);
     widget = renderWidget(await loadSnapshot(settings, config.runsInApp), settings, family);
   } catch (error) {
     widget = new ListWidget(); widget.addText("小组件配置错误"); widget.addText(error.message); widget.url = scriptURL();
