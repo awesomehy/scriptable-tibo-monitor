@@ -1,0 +1,11 @@
+{
+  "name": "tibo-monitor-scriptable",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "test": "node --test",
+    "release": "node scripts/release.mjs",
+    "check:live": "node scripts/check-live.mjs"
+  }
+}

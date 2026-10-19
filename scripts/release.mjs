@@ -1,0 +1,11 @@
+import { readFile, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
+const root = new URL('../', import.meta.url);
+const script = await readFile(new URL('TiboMonitor.js', root), 'utf8');
+const version = script.match(/^const VERSION = "(\d+\.\d+\.\d+)";/m)?.[1];
+if (!version || !script.includes(`// version: ${version}\n`)) throw new Error('VERSION 与脚本版本标记不一致');
+new Function(`return async function() {\n${script}\n};`);
+const manifest = { id: 'tibo-monitor-widget', version, script: 'TiboMonitor.js', sha256: createHash('sha256').update(script, 'utf8').digest('hex') };
+await writeFile(new URL('update.json', root), JSON.stringify(manifest, null, 2) + '\n');
+console.log(`v${version} 更新清单已生成：${fileURLToPath(new URL('update.json', root))}`);
