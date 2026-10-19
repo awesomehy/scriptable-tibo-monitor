@@ -1,12 +1,12 @@
 // Variables used by Scriptable.
 // icon-color: deep-green; icon-glyph: rss;
 // TIBO_MONITOR_WIDGET
-// version: 1.0.0
+// version: 1.0.1
 
 // 在 Scriptable 中直接运行可预览、更新或恢复脚本。
 // 小组件 Parameter 示例：{"count":2,"refreshMinutes":15,"theme":"auto"}
 // 配置放在小组件 Parameter 中，更新代码不会覆盖配置。
-const VERSION = "1.0.0";
+const VERSION = "1.0.1";
 const SITE = "https://tibo-monitor.hhyan.me";
 const REPOSITORY = "awesomehy/scriptable-tibo-monitor";
 const BRANCH = "main";
@@ -100,10 +100,10 @@ function retryDeadline(headers, now) {
   return Number.isFinite(deadline) && deadline > now ? deadline : now + 15 * 60000;
 }
 
-async function downloadText(url, timeout) {
+async function downloadText(url, timeout, headers) {
   const request = new Request(url);
   request.timeoutInterval = timeout || 12;
-  request.headers = { Accept: "application/json, text/plain;q=0.9", "Cache-Control": "no-cache", "User-Agent": "Scriptable-TiboMonitor/" + VERSION };
+  request.headers = { Accept: "application/json, text/plain;q=0.9", "Cache-Control": "no-cache", "User-Agent": "Scriptable-TiboMonitor/" + VERSION, ...(headers || {}) };
   request.onRedirect = () => null;
   let content, transportFailed = false;
   try { content = await request.loadString(); } catch (_) { transportFailed = true; }
@@ -381,11 +381,13 @@ async function updateScript() {
     // 先锁定提交，再从同一提交读取清单和代码，避免发布时文件版本不一致。
     const commit = parseJSON(await downloadText("https://api.github.com/repos/" + REPOSITORY + "/commits/" + BRANCH, 20));
     if (!/^[a-f0-9]{40}$/.test(commit.sha || "")) throw failure("无法确认仓库版本");
-    const root = "https://raw.githubusercontent.com/" + REPOSITORY + "/" + commit.sha + "/";
-    const manifest = parseJSON(await downloadText(root + "update.json", 20));
+    const root = "https://api.github.com/repos/" + REPOSITORY + "/contents/";
+    const headers = { Accept: "application/vnd.github.raw+json" };
+    const ref = "?ref=" + commit.sha;
+    const manifest = parseJSON(await downloadText(root + "update.json" + ref, 20, headers));
     if (!isObject(manifest) || manifest.id !== "tibo-monitor-widget") throw failure("更新清单无效");
     if (!newerVersion(manifest.version, VERSION)) { await showMessage("已是最新版本", "当前版本 v" + VERSION); return; }
-    const source = await downloadText(root + "TiboMonitor.js", 20);
+    const source = await downloadText(root + "TiboMonitor.js" + ref, 20, headers);
     validateUpdate(manifest, source);
     await replaceScript(source, true);
     await showMessage("更新完成", "已更新至 v" + manifest.version + "。关闭当前脚本后再次运行即可使用新版。更新前的代码已备份，可在菜单中恢复。小组件 Parameter 保持不变。");

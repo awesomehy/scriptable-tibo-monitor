@@ -6,6 +6,7 @@ import vm from 'node:vm';
 
 const source = await readFile(new URL('../TiboMonitor.js', import.meta.url), 'utf8');
 const definitions = source.replace('try { await main(); } finally { Script.complete(); }', '');
+const currentVersion = source.match(/^const VERSION = "([\d.]+)";/m)[1];
 const START = Date.parse('2026-10-19T04:30:00Z');
 const tweet = (id = '2111990254408434095', overrides = {}) => ({ id, text: 'Original post',
   url: `https://x.com/thsottiaux/status/${id}`, publishedAt: '2026-10-19T01:18:10Z', isDemo: false,
@@ -172,8 +173,8 @@ test('SHA-256 与 Node 标准实现一致，覆盖中文、emoji 和分组边界
   }
 });
 
-function release(version = '1.0.1') {
-  const next = source.replaceAll('1.0.0', version);
+function release(version = '1.0.2') {
+  const next = source.replaceAll(currentVersion, version);
   return { next, manifest: { id: 'tibo-monitor-widget', script: 'TiboMonitor.js', version, sha256: createHash('sha256').update(next).digest('hex') } };
 }
 
@@ -181,7 +182,7 @@ test('更新校验拒绝截断代码、错误校验和、版本不匹配及语�
   const h = await harness(); const { next, manifest } = release();
   assert.doesNotThrow(() => h.validateUpdate(manifest, next));
   assert.throws(() => h.validateUpdate(manifest, next.slice(0, -20)));
-  assert.throws(() => h.validateUpdate({ ...manifest, version: '1.0.2' }, next));
+  assert.throws(() => h.validateUpdate({ ...manifest, version: '1.0.3' }, next));
   const broken = next + '\nconst = ;';
   assert.throws(() => h.validateUpdate({ ...manifest, sha256: h.sha256(broken) }, broken));
   assert.equal(h.newerVersion('1.10.0', '1.9.9'), true);
@@ -195,7 +196,8 @@ test('一键更新固定同一提交，成功备份，可恢复更新前代码',
   await h.updateScript();
   assert.equal(h.files.get('/documents/TiboMonitor.js'), next);
   assert.match(h.messages.at(-1).title, /更新完成/);
-  assert.ok(h.calls.slice(1).every(call => call.url.includes(`/${sha}/`)));
+  assert.ok(h.calls.slice(1).every(call => new URL(call.url).searchParams.get('ref') === sha));
+  assert.ok(h.calls.slice(1).every(call => call.headers.Accept === 'application/vnd.github.raw+json'));
   assert.ok(h.calls.every(call => call.redirects() === null));
   await h.restoreScript();
   assert.equal(h.files.get('/documents/TiboMonitor.js'), source);
@@ -214,11 +216,11 @@ test('更新下载或写入失败保留原脚本，桌面后台禁止更新', as
 });
 
 test('失败更新保留上次成功备份；损坏备份不能替换当前代码', async () => {
-  const h = await harness(); const first = release('1.0.1');
+  const h = await harness(); const first = release('1.0.2');
   await h.replaceScript(first.next, true);
   const backupPath = Array.from(h.files.keys()).find(path => /backup-.*\.json$/.test(path));
   const backup = h.files.get(backupPath);
-  h.failMove(); await assert.rejects(h.replaceScript(release('1.0.2').next, true));
+  h.failMove(); await assert.rejects(h.replaceScript(release('1.0.3').next, true));
   assert.equal(h.files.get('/documents/TiboMonitor.js'), first.next);
   assert.equal(h.files.get(backupPath), backup);
   h.files.set(backupPath, JSON.stringify({ ...JSON.parse(backup), source: source + '\ncorrupt' }));

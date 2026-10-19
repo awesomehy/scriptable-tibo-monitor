@@ -12,7 +12,7 @@
 ## 安装
 
 1. 在 iPhone 安装 Scriptable。
-2. 打开 [TiboMonitor.js 源码](https://raw.githubusercontent.com/awesomehy/scriptable-tibo-monitor/main/TiboMonitor.js)，复制全部内容。
+2. 打开 [TiboMonitor.js 源码](https://github.com/awesomehy/scriptable-tibo-monitor/blob/main/TiboMonitor.js)，使用文件页的复制按钮复制全部内容。
 3. 打开 Scriptable，点右上角 `+`，粘贴代码，命名为 `TiboMonitor` 并保存。
 4. 运行一次，选择小、中或大尺寸预览，允许网络访问。
 5. 长按 iOS 桌面，添加对应尺寸的 **Scriptable** 小组件。
@@ -24,7 +24,7 @@
 
 在 Scriptable 内运行 `TiboMonitor`，点击 **一键更新脚本** 即可。中、大组件底部也提供“更新脚本”入口，会打开 Scriptable 执行同一更新操作。小组件后台只读取消息，不静默改写代码。
 
-更新从 `awesomehy/scriptable-tibo-monitor` 的 `main` 分支取得最新提交，固定该提交后下载 `update.json` 和脚本，检查版本、脚本标识、SHA-256 和语法，然后写入临时文件、备份并替换当前脚本。下载、校验或写入失败会保留原脚本；SHA-256 用于检查下载完整性，信任来源仍是此仓库及 HTTPS。
+更新通过 GitHub API 从 `awesomehy/scriptable-tibo-monitor` 的 `main` 分支取得最新提交，固定该提交后读取 `update.json` 和脚本原文，检查版本、脚本标识、SHA-256 和语法，然后写入临时文件、备份并替换当前脚本。更新不依赖 raw.githubusercontent.com；公开 GitHub API 有独立的匿名访问限额，遇到限流可稍后再试。下载、校验或写入失败会保留原脚本；SHA-256 用于检查下载完整性，信任来源仍是此仓库及 HTTPS。
 
 更新后关闭当前运行并重新运行，新代码才会生效。桌面组件由 iOS 后续调度刷新。菜单中的 **恢复更新前版本** 可恢复最近一次成功更新前的代码。支持 Scriptable 本地存储和 iCloud 存储；备份在当前设备本地，不跟随 iCloud 跨设备同步。
 
