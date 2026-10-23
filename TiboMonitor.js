@@ -1,19 +1,19 @@
 // Variables used by Scriptable.
 // icon-color: deep-green; icon-glyph: rss;
 // TIBO_MONITOR_WIDGET
-// version: 1.0.5
+// version: 1.0.6
 
 // 在 Scriptable 中直接运行可预览、更新或恢复脚本。
 // 小组件 Parameter 示例：{"count":2,"refreshMinutes":10,"theme":"auto"}
 // 外观在运行菜单中选择；Parameter 可单独指定组件布局。更新保留本地设置。
-const VERSION = "1.0.5";
+const VERSION = "1.0.6";
 const SITE = "https://tibo-monitor.hhyan.me";
 const REPOSITORY = "awesomehy/scriptable-tibo-monitor";
 const BRANCH = "main";
 const DEFAULTS = { counts: { small: 1, medium: 3, large: 6 }, refreshMinutes: 10, language: "zh", theme: "auto" };
 const LIMITS = { small: 2, medium: 3, large: 7 };
 const PREFERENCES_KEY = "TiboMonitor.preferences.v1";
-const LAYOUTS = { original: "原版苔绿", night: "极夜卡片", news: "蓝白简报", timeline: "暖色时间线" };
+const LAYOUTS = { original: "原版苔绿", night: "极夜卡片", news: "蓝白简报", timeline: "暖色时间线", "timeline-dark": "暗色时间线" };
 const localFiles = FileManager.local();
 const dataDirectory = localFiles.joinPath(localFiles.documentsDirectory(), "TiboMonitorWidget");
 const legacyDataDirectory = localFiles.joinPath(localFiles.libraryDirectory(), "TiboMonitorWidget");
@@ -93,7 +93,7 @@ function settingsFor(parameter, family) {
     }
   }
   settings.count = settings.counts[family];
-  if (input.layout !== undefined && (typeof input.layout !== "string" || !Object.prototype.hasOwnProperty.call(LAYOUTS, input.layout))) throw failure("layout 可选：original / night / news / timeline");
+  if (input.layout !== undefined && (typeof input.layout !== "string" || !Object.prototype.hasOwnProperty.call(LAYOUTS, input.layout))) throw failure("layout 可选：" + Object.keys(LAYOUTS).join(" / "));
   settings.layout = input.layout ?? readLayout();
   settings.layoutOverride = input.layout ?? null;
   return settings;
@@ -285,6 +285,7 @@ function layoutColors(settings) {
     night: { background: "101827", text: "EDF2FC", muted: "A4B2C9", accent: "93C5FD", warning: "F3C57A", rule: "2D3D55", card: "1B283D" },
     news: { background: "F8FBFF", text: "182C4C", muted: "64748B", accent: "2563EB", warning: "9B591D", rule: "DCE7F7" },
     timeline: { background: "FFF7EA", text: "493627", muted: "826D58", accent: "B45F30", warning: "9B591D", rule: "E9D6BB" },
+    "timeline-dark": { background: "201C19", text: "F3E8DC", muted: "B6A594", accent: "F0AD76", warning: "F0AD76", rule: "4C3A2D" },
   };
   if (!presets[settings.layout]) return palette(settings.theme);
   const colors = {};
@@ -312,7 +313,7 @@ function postRow(parent, tweet, index, settings, colors, family, bodyLines) {
     const content = row.addStack(); content.layoutVertically();
     postContent(content, tweet, settings, colors, short, bodyLines, !small);
     if (small) { content.addSpacer(1); addText(content, beijingTime(tweet.publishedAt), 8, colors.muted, false); }
-  } else if (settings.layout === "timeline") {
+  } else if (settings.layout === "timeline" || settings.layout === "timeline-dark") {
     const stamp = beijingTime(tweet.publishedAt).split(" ");
     const time = row.addStack(); time.layoutVertically(); time.size = new Size(31, 0);
     addText(time, stamp[0], 8, colors.muted, false); time.addSpacer(2);
@@ -388,7 +389,7 @@ function renderWidget(state, settings, family) {
   tweets.forEach((tweet, index) => {
     postRow(widget, tweet, index, settings, colors, family, bodyLines);
     if (index < tweets.length - 1) {
-      if (small || settings.layout === "night" || settings.layout === "timeline") widget.addSpacer(short ? 3 : 5);
+      if (small || settings.layout === "night" || settings.layout === "timeline" || settings.layout === "timeline-dark") widget.addSpacer(short ? 3 : 5);
       else {
         widget.addSpacer(short ? 1 : 2);
         const divider = widget.addStack();

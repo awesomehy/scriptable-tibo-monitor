@@ -113,7 +113,7 @@ test('布局保存在本机，参数可单独覆盖，更新链接只保留显�
   assert.equal((await harness({ keys: h.keys })).readLayout(), 'night');
   assert.equal(h.settingsFor('{"layout":"news"}', 'medium').layout, 'news');
   for (const layout of ['unknown', '__proto__', null, ['night'], {}]) assert.throws(() => h.settingsFor(JSON.stringify({ layout }), 'medium'));
-  for (const [parameter, expected] of [[null, undefined], ['{"layout":"timeline"}', 'timeline']]) {
+  for (const [parameter, expected] of [[null, undefined], ['{"layout":"timeline"}', 'timeline'], ['{"layout":"timeline-dark"}', 'timeline-dark']]) {
     h.nodes.length = 0;
     h.renderWidget({ tweets: [tweet()], status: status(), tweetsAt: new Date(START).toISOString(), errors: {} }, h.settingsFor(parameter, 'medium'), 'medium');
     const link = new URL(h.nodes.find(node => node.text === '更新脚本 ↗').url);
@@ -121,10 +121,10 @@ test('布局保存在本机，参数可单独覆盖，更新链接只保留显�
   }
 });
 
-test('四种布局保留条数、固定字号、消息链接、缓存状态与两个成功时间', async () => {
+test('五种布局保留条数、固定字号、消息链接、缓存状态与两个成功时间', async () => {
   const h = await harness();
   const posts = Array.from({ length: 7 }, (_, i) => tweet(String(100 + i), { translation: { status: 'complete', text: i ? '长消息'.repeat(100) : '短消息' } }));
-  for (const layout of ['original', 'night', 'news', 'timeline']) for (const family of ['small', 'medium', 'large']) {
+  for (const layout of ['original', 'night', 'news', 'timeline', 'timeline-dark']) for (const family of ['small', 'medium', 'large']) {
     h.nodes.length = 0;
     const settings = h.settingsFor(JSON.stringify({ layout }), family);
     h.renderWidget({ tweets: posts, status: status(), tweetsAt: new Date(START).toISOString(), errors: { tweets: 'offline' } }, settings, family);
@@ -137,11 +137,35 @@ test('四种布局保留条数、固定字号、消息链接、缓存状态与�
   }
 });
 
+test('暗色时间线保持暖色版结构，并在所有主题中使用预览配色', async () => {
+  const h = await harness();
+  const state = { tweets: Array.from({ length: 7 }, (_, i) => tweet(String(100 + i))), status: status(), tweetsAt: new Date(START).toISOString(), errors: {} };
+  const structure = widget => JSON.parse(JSON.stringify(widget, (key, value) => ['backgroundColor', 'textColor', 'url'].includes(key) ? undefined : value));
+  for (const family of ['small', 'medium', 'large']) {
+    const light = h.renderWidget(state, h.settingsFor('{"layout":"timeline"}', family), family);
+    assert.equal(light.backgroundColor.value, 'FFF7EA');
+    for (const theme of ['auto', 'light', 'dark']) {
+      h.nodes.length = 0;
+      const dark = h.renderWidget(state, h.settingsFor(JSON.stringify({ layout: 'timeline-dark', theme }), family), family);
+      assert.equal(dark.backgroundColor.value, '201C19');
+      assert.deepEqual(structure(dark), structure(light));
+      assert.equal(h.nodes.find(node => node.text === '中文消息').textColor.value, 'F3E8DC');
+      assert.equal(h.nodes.find(node => node.text === '●').textColor.value, 'F0AD76');
+      assert.equal(h.nodes.find(node => node.size?.width === 1).backgroundColor.value, '4C3A2D');
+    }
+  }
+});
+
 test('外观菜单选择并预览，取消或保存失败不发请求', async () => {
   const h = await harness({ choices: [7, 2] }); h.ready();
   await h.main();
   assert.equal(h.readLayout(), 'news');
   assert.deepEqual(h.previews, ['medium']);
+  const dark = await harness({ choices: [7, 4] }); dark.ready();
+  await dark.main();
+  assert.equal(dark.readLayout(), 'timeline-dark');
+  assert.deepEqual(dark.previews, ['medium']);
+  assert.equal((await harness({ keys: dark.keys })).settingsFor(null, 'large').layout, 'timeline-dark');
   const cancelled = await harness({ choices: [7, -1] });
   await cancelled.main();
   assert.equal(cancelled.calls.length, 0);
