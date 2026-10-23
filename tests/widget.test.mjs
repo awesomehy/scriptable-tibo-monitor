@@ -21,6 +21,8 @@ async function harness(options = {}) {
   const clock = { now: options.now || START };
   const files = options.files || new Map([['/documents/TiboMonitor.js', runningSource]]);
   const calls = [], nodes = [], messages = [], launches = [], previews = [], widgets = [], menus = [], fileOps = [], logs = [];
+  const keys = options.keys || new Map();
+  const choices = [...(options.choices || [])];
   let plan = {}, scriptWriteFailure = false, openFailure = false;
   const fileOperation = (operation, path, content) => {
     fileOps.push({ operation, path });
@@ -70,6 +72,7 @@ async function harness(options = {}) {
   }
   const cloud = { ...fm };
   const context = { FileManager: { local: () => fm, iCloud: () => cloud }, Request, Date: FakeDate,
+    Keychain: { contains: key => keys.has(key), get: key => keys.get(key), set(key, value) { if (options.keychainFails) throw Error('locked'); keys.set(key, value); } },
     console: { error: message => logs.push(String(message)) },
     ListWidget: Element, Font: { systemFont: size => size, semiboldSystemFont: size => size },
     Size: class { constructor(width, height) { this.width = width; this.height = height; } },
@@ -80,13 +83,13 @@ async function harness(options = {}) {
     Alert: class {
       addAction() {} addCancelAction() {}
       async presentAlert() { messages.push({ title: this.title, message: this.message }); }
-      async presentSheet() { menus.push(this.title); return options.choice ?? -1; }
+      async presentSheet() { menus.push(this.title); return choices.length ? choices.shift() : options.choice ?? -1; }
     },
   };
   const names = ['settingsFor', 'validateTweets', 'validateStatus', 'loadSnapshot', 'textFor', 'resetLabel',
-    'beijingTime', 'sourceBadge', 'renderWidget', 'sha256', 'newerVersion', 'validateUpdate', 'replaceScript', 'updateScript', 'restoreScript', 'main', 'readLocal', 'writeLocal'];
+    'beijingTime', 'sourceBadge', 'renderWidget', 'sha256', 'newerVersion', 'validateUpdate', 'replaceScript', 'updateScript', 'restoreScript', 'main', 'readLocal', 'writeLocal', 'readLayout', 'saveLayout', 'configureLayout'];
   const api = await vm.runInNewContext(`(async () => { ${definitions}\nreturn {${names.join(',')}}; })()`, context);
-  return { ...api, clock, files, calls, nodes, messages, launches, previews, widgets, menus, fileOps, logs, context, settings: api.settingsFor(null, 'medium'),
+  return { ...api, clock, files, calls, nodes, messages, launches, previews, widgets, menus, fileOps, logs, keys, context, settings: api.settingsFor(null, 'medium'),
     setPlan: value => { plan = value; }, failScriptWrite: () => { scriptWriteFailure = true; },
     failOpen: () => { openFailure = true; },
     ready: () => { plan = { tweets: { body: { tweets: [tweet()] } }, status: { body: status() } }; } };
@@ -100,6 +103,53 @@ test('默认尺寸为 1/3/6，参数有边界且更新不依赖源码配置', as
   assert.equal(h.settingsFor('2', 'medium').count, 2);
   assert.equal(h.settingsFor('{"counts":{"large":5},"theme":"dark"}', 'large').count, 5);
   for (const parameter of ['oops', '-1', '4', '{"refreshMinutes":0}', '{"theme":"unknown"}']) assert.throws(() => h.settingsFor(parameter, 'medium'));
+});
+
+test('布局保存在本机，参数可单独覆盖，更新链接只保留显式布局', async () => {
+  const h = await harness();
+  assert.equal(h.readLayout(), 'original');
+  h.saveLayout('night');
+  assert.equal(h.settingsFor(null, 'small').layout, 'night');
+  assert.equal((await harness({ keys: h.keys })).readLayout(), 'night');
+  assert.equal(h.settingsFor('{"layout":"news"}', 'medium').layout, 'news');
+  for (const layout of ['unknown', '__proto__', null, ['night'], {}]) assert.throws(() => h.settingsFor(JSON.stringify({ layout }), 'medium'));
+  for (const [parameter, expected] of [[null, undefined], ['{"layout":"timeline"}', 'timeline']]) {
+    h.nodes.length = 0;
+    h.renderWidget({ tweets: [tweet()], status: status(), tweetsAt: new Date(START).toISOString(), errors: {} }, h.settingsFor(parameter, 'medium'), 'medium');
+    const link = new URL(h.nodes.find(node => node.text === '更新脚本 ↗').url);
+    assert.equal(JSON.parse(link.searchParams.get('parameter')).layout, expected);
+  }
+});
+
+test('四种布局保留条数、固定字号、消息链接、缓存状态与两个成功时间', async () => {
+  const h = await harness();
+  const posts = Array.from({ length: 7 }, (_, i) => tweet(String(100 + i), { translation: { status: 'complete', text: i ? '长消息'.repeat(100) : '短消息' } }));
+  for (const layout of ['original', 'night', 'news', 'timeline']) for (const family of ['small', 'medium', 'large']) {
+    h.nodes.length = 0;
+    const settings = h.settingsFor(JSON.stringify({ layout }), family);
+    h.renderWidget({ tweets: posts, status: status(), tweetsAt: new Date(START).toISOString(), errors: { tweets: 'offline' } }, settings, family);
+    const bodies = h.nodes.filter(node => node.type === 'text' && /^(长消息|短消息)/.test(node.text));
+    assert.equal(bodies.length, settings.count);
+    assert.ok(bodies.every(node => node.font === 12 && node.minimumScaleFactor === 1));
+    assert.equal(h.nodes.filter(node => node.url?.startsWith('https://x.com')).length, settings.count);
+    assert.ok(h.nodes.some(node => /同步 10\/19 12:30.*缓存/.test(node.text)));
+    assert.ok(h.nodes.some(node => /采集 10\/19 12:28/.test(node.text)));
+  }
+});
+
+test('外观菜单选择并预览，取消或保存失败不发请求', async () => {
+  const h = await harness({ choices: [7, 2] }); h.ready();
+  await h.main();
+  assert.equal(h.readLayout(), 'news');
+  assert.deepEqual(h.previews, ['medium']);
+  const cancelled = await harness({ choices: [7, -1] });
+  await cancelled.main();
+  assert.equal(cancelled.calls.length, 0);
+  assert.equal(cancelled.readLayout(), 'original');
+  const locked = await harness({ choices: [7, 1], keychainFails: true });
+  await locked.main();
+  assert.equal(locked.calls.length, 0);
+  assert.match(locked.messages[0].message, /未能保存/);
 });
 
 test('最新消息按发布时间排序，同一时间的大整数 ID 保持精度', async () => {
@@ -384,6 +434,7 @@ test('更新校验拒绝截断代码、错误校验和、版本不匹配及语�
 
 test('一键更新固定同一提交，成功备份，可恢复更新前代码', async () => {
   const h = await harness(); const { next, manifest } = release(); const sha = 'a'.repeat(40);
+  h.saveLayout('timeline');
   h.setPlan({ main: { body: { sha } }, 'update.json': { body: manifest }, 'TiboMonitor.js': { raw: next } });
   await h.updateScript();
   assert.equal(h.files.get('/documents/TiboMonitor.js'), next);
@@ -393,6 +444,7 @@ test('一键更新固定同一提交，成功备份，可恢复更新前代码',
   assert.ok(h.calls.every(call => call.redirects() === null));
   await h.restoreScript();
   assert.equal(h.files.get('/documents/TiboMonitor.js'), source);
+  assert.equal(h.readLayout(), 'timeline');
 });
 
 test('更新下载或写入失败保留原脚本，桌面后台禁止更新', async () => {

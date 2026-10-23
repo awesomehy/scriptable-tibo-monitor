@@ -11,3 +11,4 @@ jobs:
         with:
           node-version: 24
       - run: npm test
+      - run: npm run preview

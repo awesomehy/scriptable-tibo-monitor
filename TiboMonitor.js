@@ -1,17 +1,19 @@
 // Variables used by Scriptable.
 // icon-color: deep-green; icon-glyph: rss;
 // TIBO_MONITOR_WIDGET
-// version: 1.0.4
+// version: 1.0.5
 
 // 在 Scriptable 中直接运行可预览、更新或恢复脚本。
 // 小组件 Parameter 示例：{"count":2,"refreshMinutes":10,"theme":"auto"}
-// 配置放在小组件 Parameter 中，更新代码不会覆盖配置。
-const VERSION = "1.0.4";
+// 外观在运行菜单中选择；Parameter 可单独指定组件布局。更新保留本地设置。
+const VERSION = "1.0.5";
 const SITE = "https://tibo-monitor.hhyan.me";
 const REPOSITORY = "awesomehy/scriptable-tibo-monitor";
 const BRANCH = "main";
 const DEFAULTS = { counts: { small: 1, medium: 3, large: 6 }, refreshMinutes: 10, language: "zh", theme: "auto" };
 const LIMITS = { small: 2, medium: 3, large: 7 };
+const PREFERENCES_KEY = "TiboMonitor.preferences.v1";
+const LAYOUTS = { original: "原版苔绿", night: "极夜卡片", news: "蓝白简报", timeline: "暖色时间线" };
 const localFiles = FileManager.local();
 const dataDirectory = localFiles.joinPath(localFiles.documentsDirectory(), "TiboMonitorWidget");
 const legacyDataDirectory = localFiles.joinPath(localFiles.libraryDirectory(), "TiboMonitorWidget");
@@ -91,7 +93,36 @@ function settingsFor(parameter, family) {
     }
   }
   settings.count = settings.counts[family];
+  if (input.layout !== undefined && (typeof input.layout !== "string" || !Object.prototype.hasOwnProperty.call(LAYOUTS, input.layout))) throw failure("layout 可选：original / night / news / timeline");
+  settings.layout = input.layout ?? readLayout();
+  settings.layoutOverride = input.layout ?? null;
   return settings;
+}
+
+function readLayout() {
+  try {
+    const value = Keychain.contains(PREFERENCES_KEY) ? JSON.parse(Keychain.get(PREFERENCES_KEY)) : {};
+    if (typeof value?.layout === "string" && Object.prototype.hasOwnProperty.call(LAYOUTS, value.layout)) return value.layout;
+  } catch (_) { /* 初次运行或本地设置不可读时保留原版布局。 */ }
+  return "original";
+}
+
+function saveLayout(layout) {
+  if (typeof layout !== "string" || !Object.prototype.hasOwnProperty.call(LAYOUTS, layout)) throw failure("无效的外观布局");
+  try { Keychain.set(PREFERENCES_KEY, JSON.stringify({ layout })); }
+  catch (_) { throw failure("外观布局未能保存到本机，请重试"); }
+}
+
+async function configureLayout() {
+  const menu = new Alert(); menu.title = "外观布局";
+  menu.message = "保存到本机，所有尺寸共用。单个组件可用 Parameter 的 layout 字段覆盖。";
+  const layouts = Object.keys(LAYOUTS), current = readLayout();
+  layouts.forEach(id => menu.addAction((id === current ? "✓ " : "") + LAYOUTS[id]));
+  menu.addCancelAction("取消");
+  const index = await menu.presentSheet();
+  if (index < 0 || !layouts[index]) return null;
+  try { saveLayout(layouts[index]); return layouts[index]; }
+  catch (error) { await showMessage("设置未保存", error.message); return null; }
 }
 
 function comparePosts(a, b) {
@@ -249,6 +280,61 @@ function palette(theme) {
     accent: color("416B30", "BEDD8B"), warning: color("9B591D", "E8B26E"), rule: color("DDE3D6", "303A35") };
 }
 
+function layoutColors(settings) {
+  const presets = {
+    night: { background: "101827", text: "EDF2FC", muted: "A4B2C9", accent: "93C5FD", warning: "F3C57A", rule: "2D3D55", card: "1B283D" },
+    news: { background: "F8FBFF", text: "182C4C", muted: "64748B", accent: "2563EB", warning: "9B591D", rule: "DCE7F7" },
+    timeline: { background: "FFF7EA", text: "493627", muted: "826D58", accent: "B45F30", warning: "9B591D", rule: "E9D6BB" },
+  };
+  if (!presets[settings.layout]) return palette(settings.theme);
+  const colors = {};
+  for (const [key, hex] of Object.entries(presets[settings.layout])) colors[key] = new Color(hex);
+  return colors;
+}
+
+function postContent(parent, tweet, settings, colors, short, bodyLines, showTime) {
+  const meta = parent.addStack(), reset = resetLabel(tweet);
+  addText(meta, reset, short ? 9 : 10, reset === "重置：是" ? colors.accent : colors.muted, reset === "重置：是");
+  meta.addSpacer();
+  if (showTime) addText(meta, beijingTime(tweet.publishedAt), short ? 9 : 10, colors.muted, false);
+  parent.addSpacer(1);
+  addText(parent, textFor(tweet, settings.language), 12, colors.text, false, bodyLines);
+}
+
+function postRow(parent, tweet, index, settings, colors, family, bodyLines) {
+  const short = family !== "large", small = family === "small";
+  const row = parent.addStack(); row.url = postURL(tweet);
+  if (settings.layout === "news") {
+    row.centerAlignContent();
+    const number = row.addStack(); number.size = new Size(20, 0);
+    addText(number, String(index + 1).padStart(2, "0"), 10, colors.accent, true);
+    row.addSpacer(5);
+    const content = row.addStack(); content.layoutVertically();
+    postContent(content, tweet, settings, colors, short, bodyLines, !small);
+    if (small) { content.addSpacer(1); addText(content, beijingTime(tweet.publishedAt), 8, colors.muted, false); }
+  } else if (settings.layout === "timeline") {
+    const stamp = beijingTime(tweet.publishedAt).split(" ");
+    const time = row.addStack(); time.layoutVertically(); time.size = new Size(31, 0);
+    addText(time, stamp[0], 8, colors.muted, false); time.addSpacer(2);
+    addText(time, stamp[1] || "—", 9, colors.accent, true);
+    row.addSpacer(5);
+    const rail = row.addStack(); rail.layoutVertically(); rail.size = new Size(6, 0);
+    addText(rail, "●", 6, colors.accent, false);
+    rail.addSpacer(2);
+    const line = rail.addStack(); line.size = new Size(1, short ? 8 + bodyLines * 8 : 12 + bodyLines * 10); line.backgroundColor = colors.rule;
+    row.addSpacer(6);
+    const content = row.addStack(); content.layoutVertically();
+    postContent(content, tweet, settings, colors, short, bodyLines, false);
+  } else {
+    row.layoutVertically();
+    if (settings.layout === "night") {
+      row.backgroundColor = colors.card; row.cornerRadius = 6;
+      row.setPadding(short ? 1 : 3, 6, short ? 1 : 3, 6);
+    }
+    postContent(row, tweet, settings, colors, short, bodyLines, true);
+  }
+}
+
 function addText(container, value, size, color, bold, lines) {
   const text = container.addText(value);
   text.font = bold ? Font.semiboldSystemFont(size) : Font.systemFont(size);
@@ -269,10 +355,12 @@ function postURL(tweet) { return /^https:\/\/(?:x\.com|twitter\.com)\/thsottiaux
 
 function renderWidget(state, settings, family) {
   const widget = new ListWidget();
-  const colors = palette(settings.theme);
+  const colors = layoutColors(settings);
   const small = family === "small";
   const short = small || family === "medium";
-  const parameter = JSON.stringify({ counts: settings.counts, refreshMinutes: settings.refreshMinutes, language: settings.language, theme: settings.theme });
+  const parameters = { counts: settings.counts, refreshMinutes: settings.refreshMinutes, language: settings.language, theme: settings.theme };
+  if (settings.layoutOverride != null) parameters.layout = settings.layoutOverride;
+  const parameter = JSON.stringify(parameters);
   widget.backgroundColor = colors.background;
   widget.setPadding(short ? 10 : 14, short ? 12 : 16, short ? 10 : 14, short ? 12 : 16);
   widget.url = SITE;
@@ -298,19 +386,9 @@ function renderWidget(state, settings, family) {
   }
   const bodyLines = small ? (settings.count === 1 ? 3 : 1) : family === "medium" ? (settings.count === 1 ? 3 : settings.count === 2 ? 2 : 1) : (settings.count <= 5 ? 2 : 1);
   tweets.forEach((tweet, index) => {
-    const row = widget.addStack();
-    row.layoutVertically();
-    row.url = postURL(tweet);
-    const meta = row.addStack();
-    const reset = resetLabel(tweet);
-    addText(meta, reset, short ? 9 : 10, reset === "重置：是" ? colors.accent : colors.muted, reset === "重置：是");
-    meta.addSpacer();
-    addText(meta, beijingTime(tweet.publishedAt), short ? 9 : 10, colors.muted, false);
-    row.addSpacer(1);
-    // 正文固定字号；长消息按行数截断，不随长度缩小。
-    addText(row, textFor(tweet, settings.language), 12, colors.text, false, bodyLines);
+    postRow(widget, tweet, index, settings, colors, family, bodyLines);
     if (index < tweets.length - 1) {
-      if (small) widget.addSpacer(3);
+      if (small || settings.layout === "night" || settings.layout === "timeline") widget.addSpacer(short ? 3 : 5);
       else {
         widget.addSpacer(short ? 1 : 2);
         const divider = widget.addStack();
@@ -503,6 +581,7 @@ async function restoreScript() {
 async function main() {
   let family = config.widgetFamily || "medium";
   let parameter = args.widgetParameter;
+  let previewLayout = null;
   if (config.runsInApp) {
     if (LIMITS[args.queryParameters?.family]) family = args.queryParameters.family;
     if (args.queryParameters?.parameter !== undefined) parameter = args.queryParameters.parameter;
@@ -510,7 +589,7 @@ async function main() {
     if (args.queryParameters?.action !== "refresh") {
       const menu = new Alert(); menu.title = "Tibo 动态 · v" + VERSION;
       menu.message = "预览会重新读取公开消息。所有显示时间均为北京时间。";
-      ["预览小组件", "预览中组件", "预览大组件", "一键更新脚本", "恢复更新前版本", "打开网站", "缓存诊断"].forEach(title => menu.addAction(title));
+      ["预览小组件", "预览中组件", "预览大组件", "一键更新脚本", "恢复更新前版本", "打开网站", "缓存诊断", "外观布局（" + LAYOUTS[readLayout()] + "）"].forEach(title => menu.addAction(title));
       menu.addCancelAction("取消");
       const choice = await menu.presentSheet();
       if (choice < 0) return;
@@ -518,7 +597,11 @@ async function main() {
       if (choice === 4) { await restoreScript(); return; }
       if (choice === 5) { Safari.open(SITE); return; }
       if (choice === 6) { await diagnoseCache(); return; }
-      family = ["small", "medium", "large"][choice];
+      if (choice === 7) {
+        previewLayout = await configureLayout();
+        if (!previewLayout) return;
+        // 本次先预览新选择；桌面上显式填写的 layout 仍优先于本地设置。
+      } else family = ["small", "medium", "large"][choice];
     }
   }
   if (!LIMITS[family]) {
@@ -527,6 +610,7 @@ async function main() {
   let widget, storageError;
   try {
     const settings = settingsFor(parameter, family);
+    if (previewLayout) { settings.layout = previewLayout; settings.layoutOverride = null; }
     const state = await loadSnapshot(settings, config.runsInApp);
     storageError = state.storageError;
     widget = renderWidget(state, settings, family);
