@@ -1,12 +1,12 @@
 // Variables used by Scriptable.
 // icon-color: deep-green; icon-glyph: rss;
 // TIBO_MONITOR_WIDGET
-// version: 1.0.6
+// version: 1.0.7
 
 // 在 Scriptable 中直接运行可预览、更新或恢复脚本。
 // 小组件 Parameter 示例：{"count":2,"refreshMinutes":10,"theme":"auto"}
 // 外观在运行菜单中选择；Parameter 可单独指定组件布局。更新保留本地设置。
-const VERSION = "1.0.6";
+const VERSION = "1.0.7";
 const SITE = "https://tibo-monitor.hhyan.me";
 const REPOSITORY = "awesomehy/scriptable-tibo-monitor";
 const BRANCH = "main";
@@ -302,17 +302,45 @@ function postContent(parent, tweet, settings, colors, short, bodyLines, showTime
   addText(parent, textFor(tweet, settings.language), 12, colors.text, false, bodyLines);
 }
 
+function smallLineLimits(count) {
+  // screenSize 使用点，横竖屏取短边；无法读取尺寸时保守地按小屏分配。
+  let compact = true;
+  try {
+    const screen = Device.screenSize();
+    compact = Math.min(screen.width, screen.height) < 350;
+  } catch (_) {}
+  return Array.from({ length: count }, (_, index) => count === 1 ? (compact ? 4 : 5) : compact && index > 0 ? 1 : 2);
+}
+
+function smallPostContent(row, tweet, settings, colors, bodyLines) {
+  row.layoutVertically();
+  if (settings.layout === "night") {
+    row.backgroundColor = colors.card; row.cornerRadius = 6;
+    row.setPadding(0, 6, 0, 6);
+  }
+  const meta = row.addStack(); meta.centerAlignContent();
+  addText(meta, "●", 6, colors.accent, false);
+  meta.addSpacer(4);
+  addText(meta, beijingTime(tweet.publishedAt), 8, colors.muted, false);
+  meta.addSpacer();
+  const reset = resetLabel(tweet);
+  addText(meta, reset, 8, reset === "重置：是" ? colors.accent : colors.muted, reset === "重置：是");
+  row.addSpacer(3);
+  addText(row, textFor(tweet, settings.language), 12, colors.text, false, bodyLines);
+}
+
 function postRow(parent, tweet, index, settings, colors, family, bodyLines) {
-  const short = family !== "large", small = family === "small";
+  const short = family !== "large";
   const row = parent.addStack(); row.url = postURL(tweet);
-  if (settings.layout === "news") {
+  if (family === "small") {
+    smallPostContent(row, tweet, settings, colors, bodyLines);
+  } else if (settings.layout === "news") {
     row.centerAlignContent();
     const number = row.addStack(); number.size = new Size(20, 0);
     addText(number, String(index + 1).padStart(2, "0"), 10, colors.accent, true);
     row.addSpacer(5);
     const content = row.addStack(); content.layoutVertically();
-    postContent(content, tweet, settings, colors, short, bodyLines, !small);
-    if (small) { content.addSpacer(1); addText(content, beijingTime(tweet.publishedAt), 8, colors.muted, false); }
+    postContent(content, tweet, settings, colors, short, bodyLines, true);
   } else if (settings.layout === "timeline" || settings.layout === "timeline-dark") {
     const stamp = beijingTime(tweet.publishedAt).split(" ");
     const time = row.addStack(); time.layoutVertically(); time.size = new Size(31, 0);
@@ -385,9 +413,10 @@ function renderWidget(state, settings, family) {
     widget.addSpacer(4);
     addText(widget, state.errors.tweets || "公开接口当前没有返回消息", 11, colors.muted, false, 2);
   }
-  const bodyLines = small ? (settings.count === 1 ? 3 : 1) : family === "medium" ? (settings.count === 1 ? 3 : settings.count === 2 ? 2 : 1) : (settings.count <= 5 ? 2 : 1);
+  const smallLines = small ? smallLineLimits(tweets.length) : [];
+  const bodyLines = family === "medium" ? (settings.count === 1 ? 3 : settings.count === 2 ? 2 : 1) : (settings.count <= 5 ? 2 : 1);
   tweets.forEach((tweet, index) => {
-    postRow(widget, tweet, index, settings, colors, family, bodyLines);
+    postRow(widget, tweet, index, settings, colors, family, small ? smallLines[index] : bodyLines);
     if (index < tweets.length - 1) {
       if (small || settings.layout === "night" || settings.layout === "timeline" || settings.layout === "timeline-dark") widget.addSpacer(short ? 3 : 5);
       else {

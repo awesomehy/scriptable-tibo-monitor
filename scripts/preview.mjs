@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 
 const source = (await readFile(new URL('../TiboMonitor.js', import.meta.url), 'utf8'))
   .replace('try { await main(); } finally { Script.complete(); }', '');
+const version = source.match(/^const VERSION = "([\d.]+)";/m)[1];
 const esc = value => String(value).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const now = Date.parse('2026-10-24T15:58:00Z');
 const fixtures = [
@@ -17,7 +18,7 @@ const fixtures = [
   '更多功能正在路上。',
 ];
 
-function capture(family, layout, scenario = 'ready', count, dark = false) {
+function capture(family, layout, scenario = 'ready', count, dark = false, screenWidth = 390) {
   const nodes = [];
   class Node {
     constructor(kind = 'stack', value) { Object.assign(this, { kind, value, direction: kind === 'widget' ? 'column' : 'row', children: [] }); nodes.push(this); }
@@ -34,6 +35,7 @@ function capture(family, layout, scenario = 'ready', count, dark = false) {
   class Clock extends Date { constructor(...args) { super(...(args.length ? args : [now])); } static now() { return now; } }
   const api = vm.runInNewContext(`${source}\n;({settingsFor, renderWidget})`, {
     Date: Clock, ListWidget: class extends Node { constructor() { super('widget'); } }, Size, Color,
+    Device: { screenSize: () => ({ width: screenWidth, height: 844 }) },
     Font: { systemFont: size => ({ size, weight: 400 }), semiboldSystemFont: size => ({ size, weight: 600 }) },
     FileManager: { local: () => ({ documentsDirectory: () => '/documents', libraryDirectory: () => '/library', joinPath: (a, b) => a + '/' + b }) },
     Keychain: { contains: () => false }, Script: { name: () => 'TiboMonitor' },
@@ -76,7 +78,7 @@ for (const layout of ['original', 'night', 'news', 'timeline', 'timeline-dark'])
   for (const family of ['small', 'medium', 'large']) states[key][family] = html(capture(family, layout, scenario, density === 'max' ? { small: 2, medium: 3, large: 7 }[family] : undefined, dark));
 }
 const output = `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Tibo 动态 · 布局预览</title>
-<style>*{box-sizing:border-box}body{margin:0;background:#f4f4f5;color:#1d2633;font:14px -apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif}main{max-width:1160px;padding:36px;margin:auto}h1{margin:0 0 10px;font-size:28px}.controls{display:flex;gap:16px;flex-wrap:wrap;margin:24px 0}label{font-size:12px;color:#64748b}select{display:block;margin-top:7px;padding:9px 12px;border:1px solid #ddd;border-radius:8px;background:white}.stage{display:flex;flex-wrap:wrap;align-items:start;gap:28px;background:linear-gradient(130deg,#5288a0,#617688);border-radius:28px;padding:28px}.device-label{color:#fff9;margin:0 0 12px}.widget{width:164px;height:164px;border-radius:26px;overflow:hidden}.medium .widget{width:344px}.large .widget{width:344px;height:364px}.native-text{display:block;flex-shrink:0;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}p{color:#64748b;line-height:1.8}a{color:#2563eb}#version{font-size:11px;color:#64748b}</style><main><div id="version">Scriptable · 1.0.6</div><h1>Tibo 动态，五种阅读方式。</h1><p>运行脚本 → 外观布局。所有示例由实际脚本的组件树生成。</p><div class="controls">
+<style>*{box-sizing:border-box}body{margin:0;background:#f4f4f5;color:#1d2633;font:14px -apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif}main{max-width:1160px;padding:36px;margin:auto}h1{margin:0 0 10px;font-size:28px}.controls{display:flex;gap:16px;flex-wrap:wrap;margin:24px 0}label{font-size:12px;color:#64748b}select{display:block;margin-top:7px;padding:9px 12px;border:1px solid #ddd;border-radius:8px;background:white}.stage{display:flex;flex-wrap:wrap;align-items:start;gap:28px;background:linear-gradient(130deg,#5288a0,#617688);border-radius:28px;padding:28px}.device-label{color:#fff9;margin:0 0 12px}.widget{width:164px;height:164px;border-radius:26px;overflow:hidden}.medium .widget{width:344px}.large .widget{width:344px;height:364px}.native-text{display:block;flex-shrink:0;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}p{color:#64748b;line-height:1.8}a{color:#2563eb}#version{font-size:11px;color:#64748b}</style><main><div id="version">Scriptable · ${version}</div><h1>Tibo 动态，五种阅读方式。</h1><p>运行脚本 → 外观布局。所有示例由实际脚本的组件树生成。</p><div class="controls">
 <label>布局<select id="layout"><option value="original">原版苔绿</option><option value="night">极夜卡片</option><option value="news">蓝白简报</option><option value="timeline">暖色时间线</option><option value="timeline-dark">暗色时间线</option></select></label>
 <label>状态<select id="scenario"><option value="ready">示例消息</option><option value="long">长文本</option><option value="stale">刷新失败 · 旧缓存</option><option value="empty">暂无消息</option><option value="error">无缓存 · 网络失败</option></select></label>
 <label>条数<select id="density"><option value="default">默认 1 / 3 / 6</option><option value="max">最多 2 / 3 / 7</option></select></label>

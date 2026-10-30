@@ -54,7 +54,7 @@ async function harness(options = {}) {
     constructor(type = 'stack', text = '') { this.type = type; this.text = text; this.children = []; nodes.push(this); }
     addStack() { const child = new Element(); this.children.push(child); return child; }
     addText(text) { const child = new Element('text', text); this.children.push(child); return child; }
-    addSpacer() {} centerAlignContent() {} layoutVertically() {} setPadding() {}
+    addSpacer() {} centerAlignContent() {} layoutVertically() { this.direction = 'column'; } setPadding() {}
     async presentSmall() { previews.push('small'); }
     async presentMedium() { previews.push('medium'); }
     async presentLarge() { previews.push('large'); }
@@ -75,6 +75,7 @@ async function harness(options = {}) {
     Keychain: { contains: key => keys.has(key), get: key => keys.get(key), set(key, value) { if (options.keychainFails) throw Error('locked'); keys.set(key, value); } },
     console: { error: message => logs.push(String(message)) },
     ListWidget: Element, Font: { systemFont: size => size, semiboldSystemFont: size => size },
+    Device: { screenSize() { if (options.screenError) throw Error('unavailable'); return options.screenSize || { width: 390, height: 844 }; } },
     Size: class { constructor(width, height) { this.width = width; this.height = height; } },
     Color: class { constructor(value) { this.value = value; } static dynamic(light) { return light; } },
     Script: { name: () => options.scriptName || 'TiboMonitor', setWidget(widget) { widgets.push(widget); }, complete() {} },
@@ -151,9 +152,46 @@ test('暗色时间线保持暖色版结构，并在所有主题中使用预览�
       assert.deepEqual(structure(dark), structure(light));
       assert.equal(h.nodes.find(node => node.text === '中文消息').textColor.value, 'F3E8DC');
       assert.equal(h.nodes.find(node => node.text === '●').textColor.value, 'F0AD76');
-      assert.equal(h.nodes.find(node => node.size?.width === 1).backgroundColor.value, '4C3A2D');
+      if (family !== 'small') assert.equal(h.nodes.find(node => node.size?.width === 1).backgroundColor.value, '4C3A2D');
     }
   }
+});
+
+test('小号正文通栏，发布时间和重置状态同排，五种配色都保留固定字号与成功时间', async () => {
+  const h = await harness();
+  const post = tweet('100', { translation: { status: 'complete', text: '很长的推文内容'.repeat(100) } });
+  for (const layout of ['original', 'night', 'news', 'timeline', 'timeline-dark']) {
+    h.nodes.length = 0;
+    h.renderWidget({ tweets: [post], status: status(), tweetsAt: new Date(START).toISOString(), errors: {} }, h.settingsFor(JSON.stringify({ layout }), 'small'), 'small');
+    const row = h.nodes.find(node => node.url === post.url);
+    const body = h.nodes.find(node => node.text === post.translation.text);
+    assert.equal(row.direction, 'column');
+    assert.ok(row.children.includes(body), '正文直接放在通栏纵向消息容器里');
+    assert.ok(row.children.some(node => node.children.some(child => child.text === '10/19 09:18') && node.children.some(child => child.text === '重置：否')));
+    assert.ok(!h.nodes.some(node => node.size?.width > 0), '不再保留占据正文宽度的日期列或编号列');
+    assert.equal(body.lineLimit, 5);
+    assert.equal(body.font, 12);
+    assert.equal(body.minimumScaleFactor, 1);
+    assert.ok(h.nodes.some(node => node.text === '同步 10/19 12:30'));
+    assert.ok(h.nodes.some(node => node.text === '采集 10/19 12:28'));
+  }
+});
+
+test('小号按实际条数分配行数，小屏与横屏都为底部时间保留空间', async () => {
+  const posts = [tweet('100'), tweet('101')];
+  for (const [screenSize, expected] of [[{ width: 390, height: 844 }, [2, 2]], [{ width: 320, height: 568 }, [2, 1]], [{ width: 568, height: 320 }, [2, 1]]]) {
+    const h = await harness({ screenSize });
+    const settings = h.settingsFor('{"count":2,"layout":"timeline-dark"}', 'small');
+    for (const count of [2, 1]) {
+      h.nodes.length = 0;
+      h.renderWidget({ tweets: posts.slice(0, count), status: status(), tweetsAt: new Date(START).toISOString(), errors: {} }, settings, 'small');
+      const bodies = h.nodes.filter(node => node.text === '中文消息');
+      assert.deepEqual(bodies.map(node => node.lineLimit), count === 2 ? expected : [expected[1] === 1 ? 4 : 5]);
+    }
+  }
+  const fallback = await harness({ screenError: true });
+  fallback.renderWidget({ tweets: posts.slice(0, 1), status: status(), tweetsAt: new Date(START).toISOString(), errors: {} }, fallback.settingsFor(null, 'small'), 'small');
+  assert.equal(fallback.nodes.find(node => node.text === '中文消息').lineLimit, 4);
 });
 
 test('外观菜单选择并预览，取消或保存失败不发请求', async () => {
